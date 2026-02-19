@@ -1,28 +1,36 @@
 import logging
+import asyncio
+import google.generativeai as genai
 from vkbottle.bot import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
 from vkbottle.dispatch.rules.base import StateRule
 from vkbottle.dispatch.states import BaseStateGroup
-import asyncio
 
-# Токен сообщества ВКонтакте (получаем в настройках сообщества -> Работа с API)
-TOKEN = "your_vk_group_token"
-# Реферальная ссылка на магазин стройматериалов
-REFERRAL_LINK_MATERIALS = "https://ad.admitad.com/your-referral-link"
+# ---------- НАСТРОЙКИ ----------
+VK_TOKEN = "ВАШ_НОВЫЙ_VK_ТОКЕН"            # замените на новый токен VK
+GEMINI_API_KEY = "AIzaSyAzW2TzaCS14ahwW0-XCZM0bWS36KfaZLc"  # ваш ключ (держите в секрете!)
+REFERRAL_LINK_MATERIALS = "https://ad.admitad.com/your-referral-link"  # реферальная ссылка
 
-bot = Bot(token=TOKEN)
+# Настройка Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')  # или 'gemini-pro', если доступно
+
+bot = Bot(token=VK_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
-# Определяем состояния для конечного автомата (расчёт сметы)
+# ---------- СОСТОЯНИЯ ----------
 class EstimateStates(BaseStateGroup):
     ROOM_TYPE = 0
     AREA = 1
     WORK_TYPE = 2
+    AI_DESCRIPTION = 3   # новое состояние для ввода описания
 
-# Клавиатура главного меню
+# ---------- КЛАВИАТУРЫ ----------
 main_keyboard = (
     Keyboard(one_time=False, inline=False)
-    .add(Text("🧮 Рассчитать смету"), color=KeyboardButtonColor.PRIMARY)
+    .add(Text("🧮 Рассчитать смету (обычный)"), color=KeyboardButtonColor.PRIMARY)
+    .row()
+    .add(Text("🤖 Помощь ИИ в смете"), color=KeyboardButtonColor.PRIMARY)
     .row()
     .add(Text("🛒 Подобрать материалы"), color=KeyboardButtonColor.SECONDARY)
     .row()
@@ -31,7 +39,6 @@ main_keyboard = (
     .get_json()
 )
 
-# Клавиатура для выбора типа помещения
 room_keyboard = (
     Keyboard(one_time=True, inline=False)
     .add(Text("Квартира"))
@@ -40,7 +47,6 @@ room_keyboard = (
     .get_json()
 )
 
-# Клавиатура для выбора типа ремонта
 work_keyboard = (
     Keyboard(one_time=True, inline=False)
     .add(Text("Косметический"))
@@ -49,10 +55,9 @@ work_keyboard = (
     .get_json()
 )
 
-# Обработчик команды "начать" (любое сообщение, если нет состояния)
+# ---------- ОСНОВНЫЕ ОБРАБОТЧИКИ ----------
 @bot.on.message()
 async def start(message: Message):
-    # Проверяем, не находимся ли мы уже в каком-то состоянии
     if await bot.state_dispenser.get(message.peer_id):
         return
     await message.answer(
@@ -60,8 +65,8 @@ async def start(message: Message):
         keyboard=main_keyboard
     )
 
-# ---------- Расчёт сметы ----------
-@bot.on.message(text="🧮 Рассчитать смету")
+# ---------- ОБЫЧНЫЙ РАСЧЁТ СМЕТЫ ----------
+@bot.on.message(text="🧮 Рассчитать смету (обычный)")
 async def estimate_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, EstimateStates.ROOM_TYPE)
     await message.answer("Выберите тип помещения:", keyboard=room_keyboard)
@@ -88,13 +93,11 @@ async def estimate_work_type(message: Message):
     if message.text not in ["Косметический", "Капитальный", "Дизайнерский"]:
         await message.answer("Пожалуйста, выберите вид ремонта на клавиатуре.")
         return
-    # Получаем сохранённые данные
     state_data = await bot.state_dispenser.get(message.peer_id)
     room_type = state_data.payload["room_type"]
     area = state_data.payload["area"]
     work_type = message.text
 
-    # Простой расчёт стоимости
     base_price = {"Косметический": 3000, "Капитальный": 7000, "Дизайнерский": 12000}[work_type]
     total = area * base_price
 
@@ -109,10 +112,55 @@ async def estimate_work_type(message: Message):
     )
     await bot.state_dispenser.delete(message.peer_id)
 
-# ---------- Подбор материалов с реферальными ссылками ----------
+# ---------- НОВОЕ: ПОМОЩЬ ИИ В СОСТАВЛЕНИИ СМЕТЫ ----------
+@bot.on.message(text="🤖 Помощь ИИ в смете")
+async def ai_estimate_start(message: Message):
+    await bot.state_dispenser.set(message.peer_id, EstimateStates.AI_DESCRIPTION)
+    await message.answer(
+        "Опишите словами, что вы хотите сделать (например: «нужно сделать ремонт в ванной 4 м², положить плитку на стены и пол, заменить унитаз и раковину»).",
+        keyboard=Keyboard.get_empty()
+    )
+
+@bot.on.message(state=EstimateStates.AI_DESCRIPTION)
+async def ai_estimate_process(message: Message):
+    user_text = message.text
+    await message.answer("⏳ Генерирую смету с помощью ИИ... Это займёт несколько секунд.")
+
+    # Промпт для Gemini
+    prompt = f"""
+Ты — помощник в составлении строительных смет. На основе описания клиента составь примерную смету ремонта.
+
+Описание клиента: {user_text}
+
+Формат ответа:
+- Перечисли основные виды работ.
+- Для каждого вида работ укажи примерный объём (в м², шт. и т.п.) и примерную стоимость (работа + материалы).
+- В конце укажи общую примерную сумму (в рублях).
+- Добавь пару советов по выбору материалов.
+
+Ответ должен быть понятным, структурированным, без лишних отступлений.
+"""
+
+    try:
+        # Запускаем запрос к Gemini в отдельном потоке, чтобы не блокировать бота
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
+        answer = response.text
+    except Exception as e:
+        logging.error(f"Ошибка Gemini: {e}")
+        answer = "😕 Не удалось получить ответ от ИИ. Попробуйте позже или опишите короче."
+
+    # Отправляем результат пользователю и возвращаем в главное меню
+    await message.answer(
+        f"🧠 **Смета от ИИ**\n\n{answer}\n\n---\nДля закупки материалов рекомендуем проверенный магазин: {REFERRAL_LINK_MATERIALS}",
+        keyboard=main_keyboard,
+        disable_mentions=True
+    )
+    await bot.state_dispenser.delete(message.peer_id)
+
+# ---------- ПОДБОР МАТЕРИАЛОВ ----------
 @bot.on.message(text="🛒 Подобрать материалы")
 async def materials(message: Message):
-    # Создаём клавиатуру со ссылками (OpenLink)
     materials_keyboard = (
         Keyboard(inline=True)
         .add(OpenLink(REFERRAL_LINK_MATERIALS, "Обои"))
@@ -130,32 +178,24 @@ async def materials(message: Message):
         keyboard=materials_keyboard
     )
 
-# ---------- Портфолио ----------
+# ---------- ПОРТФОЛИО ----------
 @bot.on.message(text="📸 Портфолио")
 async def portfolio(message: Message):
-    # Для фото нужно прикрепить вложение. Проще всего отправить ссылку на альбом.
     await message.answer(
         "Примеры наших работ:\n"
         "https://vk.com/album-123456789_123456789\n"  # замените на реальный альбом
         "Больше фото на сайте: https://example.com/portfolio"
     )
 
-# ---------- Вызов замерщика ----------
+# ---------- ВЫЗОВ ЗАМЕРЩИКА ----------
 @bot.on.message(text="📞 Вызвать замерщика")
 async def call_measurer(message: Message):
-    # В VK можно запросить номер через специальную кнопку с request_contact,
-    # но она доступна только в сообщениях сообщества, если разрешено.
-    # Сделаем проще: попросим пользователя написать номер вручную.
     await message.answer(
         "Для вызова замерщика напишите ваш номер телефона, и мы свяжемся с вами в ближайшее время.",
-        keyboard=main_keyboard  # можно оставить главное меню
+        keyboard=main_keyboard
     )
-    # Здесь нужно будет обработать ввод номера. Для упрощения сохраним состояние.
-    # Но для краткости просто ждём любое сообщение как номер.
-
-# Обработчик для номера (если хотите ловить после команды вызова)
-# Но чтобы не усложнять, можно просто собирать все сообщения, не подходящие под другие команды,
-# и считать их заявками. Но тогда нужна дополнительная логика.
+    # Здесь можно было бы также добавить состояние для сбора номера,
+    # но для простоты оставим так. При желании доработайте.
 
 # Запуск бота
 if __name__ == "__main__":
