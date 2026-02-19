@@ -1,2 +1,2 @@
-vkbottle
-google-generativeai
+vkbottle>=5.0.0
+google-genai
