@@ -2,8 +2,10 @@ import os
 import logging
 import asyncio
 from google import genai
+
+# Правильные импорты для vkbottle 4.6.2
 from vkbottle import Bot, Keyboard, KeyboardButtonColor, Text, OpenLink
-from vkbottle.dispatch import Message                     # <-- правильный импорт Message
+from vkbottle.dispatch.events import Message                # <-- Message отсюда
 from vkbottle.dispatch.dispenser import BaseStateGroup
 
 # ---------- ТОКЕНЫ ----------
@@ -134,10 +136,9 @@ async def ai_estimate_process(message: Message):
 """
 
     try:
-        # Используем стабильную модель gemini-1.5-flash
         response = await asyncio.to_thread(
             lambda: client.models.generate_content(
-                model='gemini-1.5-flash',   # можно заменить на другую
+                model='gemini-1.5-flash',
                 contents=prompt
             )
         )
