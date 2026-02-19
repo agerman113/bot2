@@ -4,21 +4,18 @@ import asyncio
 from google import genai
 from vkbottle import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
-from vkbottle.dispatch.dispenser import BaseStateGroup
+from vkbottle.dispatch.dispenser import BaseStateGroup  # <-- ПРАВИЛЬНЫЙ ИМПОРТ
 
-# ======================== ТОКЕНЫ (ВСТАВЛЕНЫ ВРУЧНУЮ) ========================
+# ---------- ТОКЕНЫ (ВСТАВЛЕНЫ ВАШИ) ----------
 VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
 GEMINI_API_KEY = "AIzaSyAzW2TzaCS14ahwW0-XCZM0bWS36KfaZLc"
-REFERRAL_LINK = "https://ad.admitad.com/your-referral-link"   # замените на свою партнёрскую ссылку
-# ============================================================================
+REFERRAL_LINK = "https://ad.admitad.com/your-referral-link"
+# ------------------------------------------------
 
-# Настройка Gemini (новая библиотека)
 client = genai.Client(api_key=GEMINI_API_KEY)
-
 bot = Bot(token=VK_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
-# ---------- СОСТОЯНИЯ ----------
 class EstimateStates(BaseStateGroup):
     ROOM_TYPE = 0
     AREA = 1
@@ -65,7 +62,6 @@ async def start(message: Message):
         keyboard=main_keyboard
     )
 
-# ---------- ОБЫЧНЫЙ РАСЧЁТ СМЕТЫ ----------
 @bot.on.message(text="🧮 Рассчитать смету (обычный)")
 async def estimate_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, EstimateStates.ROOM_TYPE)
@@ -112,7 +108,6 @@ async def estimate_work_type(message: Message):
     )
     await bot.state_dispenser.delete(message.peer_id)
 
-# ---------- ПОМОЩЬ ИИ ----------
 @bot.on.message(text="🤖 Помощь ИИ в смете")
 async def ai_estimate_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, EstimateStates.AI_DESCRIPTION)
@@ -159,7 +154,6 @@ async def ai_estimate_process(message: Message):
     )
     await bot.state_dispenser.delete(message.peer_id)
 
-# ---------- ПОДБОР МАТЕРИАЛОВ ----------
 @bot.on.message(text="🛒 Подобрать материалы")
 async def materials(message: Message):
     materials_keyboard = (
@@ -179,16 +173,14 @@ async def materials(message: Message):
         keyboard=materials_keyboard
     )
 
-# ---------- ПОРТФОЛИО ----------
 @bot.on.message(text="📸 Портфолио")
 async def portfolio(message: Message):
     await message.answer(
         "Примеры наших работ:\n"
-        "https://vk.com/album-123456789_123456789\n"  # замените на реальный альбом
+        "https://vk.com/album-123456789_123456789\n"
         "Больше фото на сайте: https://example.com/portfolio"
     )
 
-# ---------- ВЫЗОВ ЗАМЕРЩИКА ----------
 @bot.on.message(text="📞 Вызвать замерщика")
 async def call_measurer(message: Message):
     await message.answer(
@@ -196,6 +188,5 @@ async def call_measurer(message: Message):
         keyboard=main_keyboard
     )
 
-# ---------- ЗАПУСК ----------
 if __name__ == "__main__":
     bot.run()
