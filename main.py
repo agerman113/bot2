@@ -4,9 +4,9 @@ import asyncio
 from google import genai
 from vkbottle import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
-from vkbottle.dispatch.dispenser import BaseStateGroup  # <-- ПРАВИЛЬНЫЙ ИМПОРТ
+from vkbottle.dispatch.dispenser import BaseStateGroup
 
-# ---------- ТОКЕНЫ (ВСТАВЛЕНЫ ВАШИ) ----------
+# ---------- ТОКЕНЫ (ВСТАВЬТЕ СВОИ) ----------
 VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
 GEMINI_API_KEY = "AIzaSyAzW2TzaCS14ahwW0-XCZM0bWS36KfaZLc"
 REFERRAL_LINK = "https://ad.admitad.com/your-referral-link"
@@ -22,7 +22,6 @@ class EstimateStates(BaseStateGroup):
     WORK_TYPE = 2
     AI_DESCRIPTION = 3
 
-# ---------- КЛАВИАТУРЫ ----------
 main_keyboard = (
     Keyboard(one_time=False, inline=False)
     .add(Text("🧮 Рассчитать смету (обычный)"), color=KeyboardButtonColor.PRIMARY)
@@ -52,7 +51,6 @@ work_keyboard = (
     .get_json()
 )
 
-# ---------- ОСНОВНЫЕ ОБРАБОТЧИКИ ----------
 @bot.on.message()
 async def start(message: Message):
     if await bot.state_dispenser.get(message.peer_id):
@@ -136,9 +134,10 @@ async def ai_estimate_process(message: Message):
 """
 
     try:
+        # Здесь находится строка с моделью! Меняйте название модели при необходимости
         response = await asyncio.to_thread(
             lambda: client.models.generate_content(
-                model='gemini-2.0-flash-exp',
+                model='gemini-1.5-flash',   # <--- замените на нужную модель
                 contents=prompt
             )
         )
