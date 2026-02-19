@@ -1,779 +1,149 @@
-"""
-VK бот для мониторинга автомобилей с auto.ru и drom.ru
-Полностью готовый к запуску код с актуальными токеном и ID группы.
-Для работы требуется установить зависимости:
-pip install vk-api aiohttp beautifulsoup4
-"""
-
-import vk_api
-from vk_api.longpoll import VkLongPoll, VkEventType
-from vk_api.keyboard import VkKeyboard, VkKeyboardColor
-from vk_api.utils import get_random_id
-import json
-import os
-import asyncio
 import logging
-import aiohttp
-from bs4 import BeautifulSoup
-from datetime import datetime
-from typing import Dict, Optional, List
+from aiogram import Bot, Dispatcher, types
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils import executor
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-# ==================== НАСТРОЙКИ VK (ЗАМЕНЕНЫ НА ВАШИ) ====================
-VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
-GROUP_ID = 211710958
-# ===========================================================================
+# Настройки
+API_TOKEN = 'YOUR_BOT_TOKEN'
+REFERRAL_LINK_MATERIALS = 'https://ad.admitad.com/your-referral-link'  # Пример реферальной ссылки на магазин стройматериалов
 
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# Состояния пользователя
-STATE_MAIN_MENU = 'main_menu'
-STATE_CHOOSING_CITY = 'choosing_city'
-STATE_ADDING_URL = 'adding_url'
-STATE_SETTING_FILTERS = 'setting_filters'
-STATE_PRICE_MIN = 'price_min'
-STATE_PRICE_MAX = 'price_max'
-STATE_YEAR_MIN = 'year_min'
-STATE_YEAR_MAX = 'year_max'
-STATE_CONDITION = 'condition'
-STATE_DOCUMENTS = 'documents'
+bot = Bot(token=API_TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+dp.middleware.setup(LoggingMiddleware())
 
+# Клавиатура главного меню
+main_menu = ReplyKeyboardMarkup(resize_keyboard=True)
+main_menu.add(KeyboardButton('🧮 Рассчитать смету'))
+main_menu.add(KeyboardButton('🛒 Подобрать материалы'))
+main_menu.add(KeyboardButton('📸 Портфолио'))
+main_menu.add(KeyboardButton('📞 Вызвать замерщика'))
 
-# ==================== КЛАСС ПАРСЕРА ====================
-class CarParser:
-    """Парсер для получения данных об автомобилях с auto.ru и drom.ru"""
-    
-    @staticmethod
-    async def fetch_html(url: str) -> Optional[str]:
-        """Загружает HTML страницы"""
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        return await resp.text()
-                    else:
-                        logger.error(f"Ошибка загрузки {url}: {resp.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Исключение при загрузке {url}: {e}")
-            return None
-    
-    async def fetch_car_data(self, url: str) -> Optional[Dict]:
-        """Основной метод получения данных об авто"""
-        if 'auto.ru' in url:
-            return await self._parse_auto_ru(url)
-        elif 'drom.ru' in url:
-            return await self._parse_drom_ru(url)
-        else:
-            return None
-    
-    async def _parse_auto_ru(self, url: str) -> Optional[Dict]:
-        """Парсинг auto.ru"""
-        html = await self.fetch_html(url)
-        if not html:
-            return None
-        
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Заголовок
-        title_elem = soup.find('h1', class_='ListingItemTitle-module__title')
-        title = title_elem.get_text(strip=True) if title_elem else "Автомобиль"
-        
-        # Цена
-        price_elem = soup.find('span', class_='OfferPriceCaption__price')
-        if not price_elem:
-            price_elem = soup.find('div', {'data-testid': 'price'})
-        price = self._extract_price(price_elem.get_text() if price_elem else "0")
-        
-        # Год
-        year = None
-        params = soup.find_all('li', class_='CardInfoRow')
-        for param in params:
-            text = param.get_text()
-            if 'год' in text.lower():
-                year_str = ''.join(filter(str.isdigit, text[:4]))
-                if year_str:
-                    year = int(year_str)
-        
-        # Пробег
-        mileage = None
-        mileage_elem = soup.find('span', class_='ListingItemTechSummaryDesktop__cell')
-        if mileage_elem and 'км' in mileage_elem.get_text():
-            mileage = self._extract_price(mileage_elem.get_text())
-        
-        return {
-            'title': title,
-            'price': price,
-            'year': year,
-            'mileage': mileage,
-            'site': 'auto.ru',
-            'location': None  # можно доработать
-        }
-    
-    async def _parse_drom_ru(self, url: str) -> Optional[Dict]:
-        """Парсинг drom.ru"""
-        html = await self.fetch_html(url)
-        if not html:
-            return None
-        
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        # Заголовок
-        title_elem = soup.find('h1', class_='css-1l8ph9k e162wx9x0')
-        if not title_elem:
-            title_elem = soup.find('title')
-        title = title_elem.get_text(strip=True) if title_elem else "Автомобиль"
-        
-        # Цена
-        price_elem = soup.find('span', {'itemprop': 'price'})
-        if not price_elem:
-            price_elem = soup.find('div', class_='css-1ny5kvn')
-        price = self._extract_price(price_elem.get_text() if price_elem else "0")
-        
-        # Год, пробег — можно доработать
-        year = None
-        mileage = None
-        
-        return {
-            'title': title.split('—')[0].strip(),
-            'price': price,
-            'year': year,
-            'mileage': mileage,
-            'site': 'drom.ru',
-            'location': None
-        }
-    
-    @staticmethod
-    def _extract_price(text: str) -> int:
-        """Извлекает число из строки с ценой"""
-        digits = ''.join(filter(str.isdigit, text))
-        return int(digits) if digits else 0
+# Состояния для сметы
+class EstimateState(StatesGroup):
+    room_type = State()      # тип помещения
+    area = State()           # площадь
+    work_type = State()      # вид работ
 
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "Здравствуйте! Я бот строительной компании «РемонтПрофи». Помогу рассчитать стоимость ремонта, подобрать материалы и вызвать специалиста.",
+        reply_markup=main_menu
+    )
 
-# ==================== ОСНОВНОЙ КЛАСС БОТА ====================
-class VKAutoMonitorBot:
-    def __init__(self, token: str, group_id: int):
-        self.vk_session = vk_api.VkApi(token=token)
-        self.vk = self.vk_session.get_api()
-        self.longpoll = VkLongPoll(self.vk_session)
-        self.group_id = group_id
-        self.parser = CarParser()
-        
-        self.user_data_file = 'vk_user_data.json'
-        self.user_states = {}
-        self.load_user_data()
-        
-    def load_user_data(self):
-        if os.path.exists(self.user_data_file):
-            with open(self.user_data_file, 'r', encoding='utf-8') as f:
-                self.user_data = json.load(f)
-        else:
-            self.user_data = {}
-    
-    def save_user_data(self):
-        with open(self.user_data_file, 'w', encoding='utf-8') as f:
-            json.dump(self.user_data, f, ensure_ascii=False, indent=2)
-    
-    def get_user_data(self, user_id: str) -> Dict:
-        if user_id not in self.user_data:
-            self.user_data[user_id] = {
-                'city': None,
-                'monitored_cars': {},
-                'filters': {
-                    'price_min': None,
-                    'price_max': None,
-                    'year_min': None,
-                    'year_max': None,
-                    'condition': None,
-                    'documents': None,
-                },
-                'price_threshold': 5
-            }
-        return self.user_data[user_id]
-    
-    def send_message(self, user_id: int, message: str, keyboard=None, attachment=None):
-        params = {
-            'user_id': user_id,
-            'message': message,
-            'random_id': get_random_id()
-        }
-        if keyboard:
-            params['keyboard'] = keyboard.get_keyboard()
-        if attachment:
-            params['attachment'] = attachment
-        self.vk.messages.send(**params)
-    
-    def create_main_menu_keyboard(self) -> VkKeyboard:
-        keyboard = VkKeyboard(one_time=False)
-        keyboard.add_button('🏙 Выбрать город', VkKeyboardColor.PRIMARY)
-        keyboard.add_button('➕ Добавить объявление', VkKeyboardColor.POSITIVE)
-        keyboard.add_line()
-        keyboard.add_button('📋 Мои объявления', VkKeyboardColor.SECONDARY)
-        keyboard.add_button('🔍 Фильтры', VkKeyboardColor.SECONDARY)
-        keyboard.add_line()
-        keyboard.add_button('⚙️ Настройки', VkKeyboardColor.SECONDARY)
-        keyboard.add_button('❓ Помощь', VkKeyboardColor.SECONDARY)
-        return keyboard
-    
-    def create_city_keyboard(self) -> VkKeyboard:
-        keyboard = VkKeyboard(one_time=True)
-        cities = [
-            ['Москва', 'Санкт-Петербург'],
-            ['Новосибирск', 'Екатеринбург'],
-            ['Казань', 'Нижний Новгород'],
-            ['Челябинск', 'Самара'],
-            ['Омск', 'Ростов-на-Дону'],
-            ['Краснодар', 'Воронеж']
-        ]
-        for row in cities:
-            for i, city in enumerate(row):
-                if i > 0:
-                    keyboard.add_button(city, VkKeyboardColor.PRIMARY)
-                else:
-                    keyboard.add_line()
-                    keyboard.add_button(city, VkKeyboardColor.PRIMARY)
-        keyboard.add_line()
-        keyboard.add_button('✏️ Другой город', VkKeyboardColor.SECONDARY)
-        keyboard.add_button('« Назад', VkKeyboardColor.NEGATIVE)
-        return keyboard
-    
-    def create_filters_keyboard(self) -> VkKeyboard:
-        keyboard = VkKeyboard(one_time=False)
-        keyboard.add_button('💰 Цена', VkKeyboardColor.PRIMARY)
-        keyboard.add_button('📅 Год выпуска', VkKeyboardColor.PRIMARY)
-        keyboard.add_line()
-        keyboard.add_button('🚗 Состояние', VkKeyboardColor.SECONDARY)
-        keyboard.add_button('📄 Документы', VkKeyboardColor.SECONDARY)
-        keyboard.add_line()
-        keyboard.add_button('🗑 Сбросить фильтры', VkKeyboardColor.NEGATIVE)
-        keyboard.add_button('« Назад', VkKeyboardColor.NEGATIVE)
-        return keyboard
-    
-    def create_condition_keyboard(self) -> VkKeyboard:
-        keyboard = VkKeyboard(one_time=True)
-        keyboard.add_button('🆕 Новый', VkKeyboardColor.POSITIVE)
-        keyboard.add_button('🔧 С пробегом', VkKeyboardColor.PRIMARY)
-        keyboard.add_line()
-        keyboard.add_button('🔄 Любое', VkKeyboardColor.SECONDARY)
-        keyboard.add_button('« Назад', VkKeyboardColor.NEGATIVE)
-        return keyboard
-    
-    def create_documents_keyboard(self) -> VkKeyboard:
-        keyboard = VkKeyboard(one_time=True)
-        keyboard.add_button('✅ С документами', VkKeyboardColor.POSITIVE)
-        keyboard.add_button('❌ Без документов', VkKeyboardColor.PRIMARY)
-        keyboard.add_line()
-        keyboard.add_button('🔄 Любые', VkKeyboardColor.SECONDARY)
-        keyboard.add_button('« Назад', VkKeyboardColor.NEGATIVE)
-        return keyboard
-    
-    def create_back_keyboard(self) -> VkKeyboard:
-        keyboard = VkKeyboard(one_time=True)
-        keyboard.add_button('« Назад', VkKeyboardColor.NEGATIVE)
-        return keyboard
-    
-    def format_filters(self, user_id: str) -> str:
-        user_data = self.get_user_data(user_id)
-        filters = user_data['filters']
-        lines = []
-        if filters['price_min'] or filters['price_max']:
-            price_str = "💰 Цена: "
-            if filters['price_min'] and filters['price_max']:
-                price_str += f"{filters['price_min']:,} - {filters['price_max']:,} ₽"
-            elif filters['price_min']:
-                price_str += f"от {filters['price_min']:,} ₽"
-            else:
-                price_str += f"до {filters['price_max']:,} ₽"
-            lines.append(price_str)
-        if filters['year_min'] or filters['year_max']:
-            year_str = "📅 Год: "
-            if filters['year_min'] and filters['year_max']:
-                year_str += f"{filters['year_min']} - {filters['year_max']}"
-            elif filters['year_min']:
-                year_str += f"от {filters['year_min']}"
-            else:
-                year_str += f"до {filters['year_max']}"
-            lines.append(year_str)
-        if filters['condition']:
-            condition_map = {
-                'new': '🆕 Новый',
-                'used': '🔧 С пробегом',
-                'any': '🔄 Любое'
-            }
-            lines.append(f"🚗 Состояние: {condition_map.get(filters['condition'], 'Не указано')}")
-        if filters['documents']:
-            docs_map = {
-                'with_docs': '✅ С документами',
-                'without_docs': '❌ Без документов',
-                'any': '🔄 Любые'
-            }
-            lines.append(f"📄 Документы: {docs_map.get(filters['documents'], 'Не указано')}")
-        if not lines:
-            return "Фильтры не установлены"
-        return "\n".join(lines)
-    
-    def check_filters(self, car_data: Dict, filters: Dict) -> bool:
-        if filters['price_min'] and car_data['price'] < filters['price_min']:
-            return False
-        if filters['price_max'] and car_data['price'] > filters['price_max']:
-            return False
-        if car_data.get('year'):
-            if filters['year_min'] and car_data['year'] < filters['year_min']:
-                return False
-            if filters['year_max'] and car_data['year'] > filters['year_max']:
-                return False
-        return True
-    
-    def handle_start(self, user_id: int):
-        user_data = self.get_user_data(str(user_id))
-        message = (
-            "🚗 Добро пожаловать в Авто Мониторинг Бот!\n\n"
-            "Я помогу отслеживать изменения цен на автомобили с:\n"
-            "• auto.ru\n"
-            "• drom.ru\n\n"
-        )
-        if user_data['city']:
-            message += f"📍 Ваш город: {user_data['city']}\n"
-            message += f"📊 Отслеживается: {len(user_data['monitored_cars'])} объявлений\n\n"
-        else:
-            message += "⚠️ Сначала выберите город\n\n"
-        message += "Выберите действие:"
-        self.user_states[user_id] = STATE_MAIN_MENU
-        self.send_message(user_id, message, self.create_main_menu_keyboard())
-    
-    def handle_choose_city(self, user_id: int):
-        message = "🏙 Выберите ваш город:\n\nГород будет использоваться для фильтрации объявлений"
-        self.user_states[user_id] = STATE_CHOOSING_CITY
-        self.send_message(user_id, message, self.create_city_keyboard())
-    
-    def handle_city_selected(self, user_id: int, city: str):
-        if city == "✏️ Другой город":
-            message = "✏️ Введите название вашего города:"
-            self.send_message(user_id, message, self.create_back_keyboard())
-            return
-        user_data = self.get_user_data(str(user_id))
-        user_data['city'] = city
-        self.save_user_data()
-        message = f"✅ Город установлен: {city}\n\nТеперь вы можете добавлять объявления!"
-        self.user_states[user_id] = STATE_MAIN_MENU
-        self.send_message(user_id, message, self.create_main_menu_keyboard())
-    
-    def handle_add_url(self, user_id: int):
-        user_data = self.get_user_data(str(user_id))
-        if not user_data['city']:
-            message = "⚠️ Сначала выберите город!\n\nИспользуйте кнопку '🏙 Выбрать город'"
-            self.send_message(user_id, message, self.create_main_menu_keyboard())
-            return
-        message = (
-            "📎 Отправьте ссылку на объявление\n\n"
-            "Поддерживаются сайты:\n"
-            "• auto.ru\n"
-            "• drom.ru\n\n"
-            "Пример:\n"
-            "https://auto.ru/cars/used/sale/kia/rio/1234567890/"
-        )
-        self.user_states[user_id] = STATE_ADDING_URL
-        self.send_message(user_id, message, self.create_back_keyboard())
-    
-    async def handle_url_received(self, user_id: int, url: str):
-        if not ('auto.ru' in url or 'drom.ru' in url):
-            message = "❌ Неверная ссылка!\n\nОтправьте ссылку с auto.ru или drom.ru"
-            self.send_message(user_id, message)
-            return
-        
-        user_str_id = str(user_id)
-        if url in self.user_data[user_str_id]['monitored_cars']:
-            message = "⚠️ Это объявление уже добавлено!"
-            self.user_states[user_id] = STATE_MAIN_MENU
-            self.send_message(user_id, message, self.create_main_menu_keyboard())
-            return
-        
-        self.send_message(user_id, "⏳ Получаю данные об автомобиле...")
-        car_data = await self.parser.fetch_car_data(url)
-        
-        if not car_data:
-            message = "❌ Не удалось получить данные\n\nПроверьте URL и попробуйте снова"
-            self.send_message(user_id, message)
-            return
-        
-        user_data = self.get_user_data(user_str_id)
-        if not self.check_filters(car_data, user_data['filters']):
-            message = (
-                "⚠️ Автомобиль не соответствует вашим фильтрам!\n\n"
-                f"🚗 {car_data['title']}\n"
-                f"💰 Цена: {car_data['price']:,} ₽\n"
-            )
-            if car_data.get('year'):
-                message += f"📅 Год: {car_data['year']}\n"
-            message += "\n❓ Всё равно добавить? Отправьте ссылку ещё раз"
-            self.send_message(user_id, message)
-            return
-        
-        self.user_data[user_str_id]['monitored_cars'][url] = {
-            'title': car_data['title'],
-            'price': car_data['price'],
-            'initial_price': car_data['price'],
-            'site': car_data['site'],
-            'year': car_data.get('year'),
-            'mileage': car_data.get('mileage'),
-            'location': car_data.get('location'),
-            'added_date': datetime.now().isoformat(),
-            'last_check': datetime.now().isoformat(),
-            'price_history': [{
-                'price': car_data['price'],
-                'date': datetime.now().isoformat()
-            }]
-        }
-        self.save_user_data()
-        
-        message = (
-            f"✅ Объявление добавлено!\n\n"
-            f"🚗 {car_data['title']}\n"
-            f"💰 Цена: {car_data['price']:,} ₽\n"
-            f"🌐 Сайт: {car_data['site']}\n"
-        )
-        if car_data.get('year'):
-            message += f"📅 Год: {car_data['year']}\n"
-        if car_data.get('mileage'):
-            message += f"🛣 Пробег: {car_data['mileage']:,} км\n"
-        if car_data.get('location'):
-            message += f"📍 Место: {car_data['location']}\n"
-        message += "\n💡 Я буду отслеживать изменения цены!"
-        
-        self.user_states[user_id] = STATE_MAIN_MENU
-        self.send_message(user_id, message, self.create_main_menu_keyboard())
-    
-    def handle_list_cars(self, user_id: int):
-        user_data = self.get_user_data(str(user_id))
-        if not user_data['monitored_cars']:
-            message = "📋 У вас нет отслеживаемых объявлений\n\nДобавьте первое объявление!"
-            self.send_message(user_id, message, self.create_main_menu_keyboard())
-            return
-        
-        message = "📋 Ваши объявления:\n\n"
-        for i, (url, car) in enumerate(user_data['monitored_cars'].items(), 1):
-            price_change = car['price'] - car['initial_price']
-            change_emoji = "📉" if price_change < 0 else "📈" if price_change > 0 else "➖"
-            message += f"{i}. {car['title']}\n"
-            message += f"   💰 {car['price']:,} ₽"
-            if price_change != 0:
-                change_percent = (price_change / car['initial_price']) * 100
-                message += f" {change_emoji} {price_change:+,} ₽ ({change_percent:+.1f}%)"
-            message += f"\n   🌐 {car['site']}"
-            if car.get('location'):
-                message += f"\n   📍 {car['location']}"
-            message += f"\n   🔗 {url}\n\n"
-        
-        if len(message) > 4096:
-            parts = [message[i:i+4000] for i in range(0, len(message), 4000)]
-            for part in parts[:-1]:
-                self.send_message(user_id, part)
-            self.send_message(user_id, parts[-1], self.create_main_menu_keyboard())
-        else:
-            self.send_message(user_id, message, self.create_main_menu_keyboard())
-    
-    def handle_filters_menu(self, user_id: int):
-        user_data = self.get_user_data(str(user_id))
-        message = "🔍 Фильтры поиска\n\n"
-        message += self.format_filters(str(user_id))
-        message += "\n\nВыберите параметр для настройки:"
-        self.user_states[user_id] = STATE_SETTING_FILTERS
-        self.send_message(user_id, message, self.create_filters_keyboard())
-    
-    def handle_price_filter(self, user_id: int):
-        message = "💰 Установка диапазона цены\n\nВведите минимальную цену в рублях (или 0 для пропуска):"
-        self.user_states[user_id] = STATE_PRICE_MIN
-        self.send_message(user_id, message, self.create_back_keyboard())
-    
-    def handle_price_min(self, user_id: int, value: str):
-        try:
-            price = int(value.replace(' ', '').replace(',', ''))
-            if price < 0:
-                raise ValueError
-            user_data = self.get_user_data(str(user_id))
-            user_data['filters']['price_min'] = price if price > 0 else None
-            self.save_user_data()
-            message = "💰 Введите максимальную цену в рублях (или 0 для пропуска):"
-            self.user_states[user_id] = STATE_PRICE_MAX
-            self.send_message(user_id, message, self.create_back_keyboard())
-        except ValueError:
-            message = "❌ Неверный формат!\n\nВведите число (например: 500000):"
-            self.send_message(user_id, message)
-    
-    def handle_price_max(self, user_id: int, value: str):
-        try:
-            price = int(value.replace(' ', '').replace(',', ''))
-            if price < 0:
-                raise ValueError
-            user_data = self.get_user_data(str(user_id))
-            user_data['filters']['price_max'] = price if price > 0 else None
-            self.save_user_data()
-            message = f"✅ Фильтр цены установлен!\n\n{self.format_filters(str(user_id))}"
-            self.user_states[user_id] = STATE_SETTING_FILTERS
-            self.send_message(user_id, message, self.create_filters_keyboard())
-        except ValueError:
-            message = "❌ Неверный формат!\n\nВведите число (например: 1500000):"
-            self.send_message(user_id, message)
-    
-    def handle_year_filter(self, user_id: int):
-        message = "📅 Установка диапазона года выпуска\n\nВведите минимальный год (или 0 для пропуска):"
-        self.user_states[user_id] = STATE_YEAR_MIN
-        self.send_message(user_id, message, self.create_back_keyboard())
-    
-    def handle_year_min(self, user_id: int, value: str):
-        try:
-            year = int(value)
-            current_year = datetime.now().year
-            if year != 0 and (year < 1900 or year > current_year):
-                raise ValueError
-            user_data = self.get_user_data(str(user_id))
-            user_data['filters']['year_min'] = year if year > 0 else None
-            self.save_user_data()
-            message = "📅 Введите максимальный год (или 0 для пропуска):"
-            self.user_states[user_id] = STATE_YEAR_MAX
-            self.send_message(user_id, message, self.create_back_keyboard())
-        except ValueError:
-            message = f"❌ Неверный год!\n\nВведите год от 1900 до {datetime.now().year}:"
-            self.send_message(user_id, message)
-    
-    def handle_year_max(self, user_id: int, value: str):
-        try:
-            year = int(value)
-            current_year = datetime.now().year
-            if year != 0 and (year < 1900 or year > current_year):
-                raise ValueError
-            user_data = self.get_user_data(str(user_id))
-            user_data['filters']['year_max'] = year if year > 0 else None
-            self.save_user_data()
-            message = f"✅ Фильтр года установлен!\n\n{self.format_filters(str(user_id))}"
-            self.user_states[user_id] = STATE_SETTING_FILTERS
-            self.send_message(user_id, message, self.create_filters_keyboard())
-        except ValueError:
-            message = f"❌ Неверный год!\n\nВведите год от 1900 до {datetime.now().year}:"
-            self.send_message(user_id, message)
-    
-    def handle_condition_filter(self, user_id: int):
-        message = "🚗 Выберите состояние автомобиля:"
-        self.user_states[user_id] = STATE_CONDITION
-        self.send_message(user_id, message, self.create_condition_keyboard())
-    
-    def handle_condition_selected(self, user_id: int, condition_text: str):
-        condition_map = {
-            '🆕 Новый': 'new',
-            '🔧 С пробегом': 'used',
-            '🔄 Любое': 'any'
-        }
-        condition = condition_map.get(condition_text)
-        if condition:
-            user_data = self.get_user_data(str(user_id))
-            user_data['filters']['condition'] = condition
-            self.save_user_data()
-            message = f"✅ Фильтр состояния установлен!\n\n{self.format_filters(str(user_id))}"
-            self.user_states[user_id] = STATE_SETTING_FILTERS
-            self.send_message(user_id, message, self.create_filters_keyboard())
-    
-    def handle_documents_filter(self, user_id: int):
-        message = "📄 Выберите наличие документов:"
-        self.user_states[user_id] = STATE_DOCUMENTS
-        self.send_message(user_id, message, self.create_documents_keyboard())
-    
-    def handle_documents_selected(self, user_id: int, docs_text: str):
-        docs_map = {
-            '✅ С документами': 'with_docs',
-            '❌ Без документов': 'without_docs',
-            '🔄 Любые': 'any'
-        }
-        docs = docs_map.get(docs_text)
-        if docs:
-            user_data = self.get_user_data(str(user_id))
-            user_data['filters']['documents'] = docs
-            self.save_user_data()
-            message = f"✅ Фильтр документов установлен!\n\n{self.format_filters(str(user_id))}"
-            self.user_states[user_id] = STATE_SETTING_FILTERS
-            self.send_message(user_id, message, self.create_filters_keyboard())
-    
-    def handle_clear_filters(self, user_id: int):
-        user_data = self.get_user_data(str(user_id))
-        user_data['filters'] = {
-            'price_min': None,
-            'price_max': None,
-            'year_min': None,
-            'year_max': None,
-            'condition': None,
-            'documents': None,
-        }
-        self.save_user_data()
-        message = "🗑 Все фильтры сброшены!"
-        self.user_states[user_id] = STATE_SETTING_FILTERS
-        self.send_message(user_id, message, self.create_filters_keyboard())
-    
-    def handle_settings(self, user_id: int):
-        user_data = self.get_user_data(str(user_id))
-        message = (
-            "⚙️ Настройки\n\n"
-            f"📍 Город: {user_data['city'] or 'Не выбран'}\n"
-            f"📊 Порог уведомлений: {user_data['price_threshold']}%\n"
-            f"📋 Объявлений: {len(user_data['monitored_cars'])}\n\n"
-            f"🔍 Фильтры:\n{self.format_filters(str(user_id))}"
-        )
-        self.send_message(user_id, message, self.create_main_menu_keyboard())
-    
-    def handle_help(self, user_id: int):
-        message = (
-            "❓ Помощь по использованию бота\n\n"
-            "🎯 Основные функции:\n"
-            "• Отслеживание цен на авто\n"
-            "• Уведомления об изменениях\n"
-            "• История изменения цен\n"
-            "• Гибкие фильтры поиска\n\n"
-            "📝 Как использовать:\n"
-            "1️⃣ Выберите город\n"
-            "2️⃣ Настройте фильтры (опционально)\n"
-            "3️⃣ Добавьте ссылки на объявления\n"
-            "4️⃣ Получайте уведомления\n\n"
-            "🔍 Доступные фильтры:\n"
-            "• Диапазон цены\n"
-            "• Год выпуска\n"
-            "• Состояние (новый/с пробегом)\n"
-            "• Наличие документов\n\n"
-            "🌐 Поддерживаемые сайты:\n"
-            "• auto.ru\n"
-            "• drom.ru\n\n"
-            "🔔 Уведомления приходят при изменении цены более чем на 5%\n\n"
-            "💡 Совет: Настройте фильтры перед добавлением объявлений!"
-        )
-        self.send_message(user_id, message, self.create_main_menu_keyboard())
-    
-    def handle_message(self, event):
-        user_id = event.user_id
-        message = event.text.strip()
-        state = self.user_states.get(user_id, STATE_MAIN_MENU)
-        
-        if message == "« Назад":
-            self.handle_start(user_id)
-            return
-        
-        if state == STATE_MAIN_MENU or message.lower() in ['начать', 'start', 'меню']:
-            if message == '🏙 Выбрать город':
-                self.handle_choose_city(user_id)
-            elif message == '➕ Добавить объявление':
-                self.handle_add_url(user_id)
-            elif message == '📋 Мои объявления':
-                self.handle_list_cars(user_id)
-            elif message == '🔍 Фильтры':
-                self.handle_filters_menu(user_id)
-            elif message == '⚙️ Настройки':
-                self.handle_settings(user_id)
-            elif message == '❓ Помощь':
-                self.handle_help(user_id)
-            else:
-                self.handle_start(user_id)
-        elif state == STATE_CHOOSING_CITY:
-            self.handle_city_selected(user_id, message)
-        elif state == STATE_ADDING_URL:
-            asyncio.create_task(self.handle_url_received(user_id, message))
-        elif state == STATE_SETTING_FILTERS:
-            if message == '💰 Цена':
-                self.handle_price_filter(user_id)
-            elif message == '📅 Год выпуска':
-                self.handle_year_filter(user_id)
-            elif message == '🚗 Состояние':
-                self.handle_condition_filter(user_id)
-            elif message == '📄 Документы':
-                self.handle_documents_filter(user_id)
-            elif message == '🗑 Сбросить фильтры':
-                self.handle_clear_filters(user_id)
-        elif state == STATE_PRICE_MIN:
-            self.handle_price_min(user_id, message)
-        elif state == STATE_PRICE_MAX:
-            self.handle_price_max(user_id, message)
-        elif state == STATE_YEAR_MIN:
-            self.handle_year_min(user_id, message)
-        elif state == STATE_YEAR_MAX:
-            self.handle_year_max(user_id, message)
-        elif state == STATE_CONDITION:
-            self.handle_condition_selected(user_id, message)
-        elif state == STATE_DOCUMENTS:
-            self.handle_documents_selected(user_id, message)
-    
-    async def monitor_prices(self):
-        logger.info("🔄 Запуск мониторинга цен...")
-        for user_id, data in self.user_data.items():
-            if not data['monitored_cars']:
-                continue
-            for url, car in data['monitored_cars'].items():
-                try:
-                    new_data = await self.parser.fetch_car_data(url)
-                    if not new_data:
-                        continue
-                    old_price = car['price']
-                    new_price = new_data['price']
-                    car['last_check'] = datetime.now().isoformat()
-                    if old_price != new_price:
-                        price_change_percent = abs((new_price - old_price) / old_price * 100)
-                        if price_change_percent >= data['price_threshold']:
-                            car['price'] = new_price
-                            car['price_history'].append({
-                                'price': new_price,
-                                'date': datetime.now().isoformat()
-                            })
-                            change_emoji = "📉" if new_price < old_price else "📈"
-                            change_text = "снизилась" if new_price < old_price else "выросла"
-                            alert_type = "🎉 Отличная новость!" if new_price < old_price else "⚠️ Внимание!"
-                            message = (
-                                f"{alert_type}\n\n"
-                                f"{change_emoji} Изменение цены!\n\n"
-                                f"🚗 {car['title']}\n"
-                                f"💰 Старая цена: {old_price:,} ₽\n"
-                                f"💰 Новая цена: {new_price:,} ₽\n"
-                                f"📊 Изменение: {new_price - old_price:+,} ₽ "
-                                f"({(new_price - old_price) / old_price * 100:+.1f}%)\n\n"
-                            )
-                            if new_price < old_price:
-                                savings = old_price - new_price
-                                message += f"💵 Экономия: {savings:,} ₽\n\n"
-                            message += f"🔗 {url}"
-                            try:
-                                self.send_message(int(user_id), message)
-                                logger.info(f"✅ Уведомление отправлено {user_id}")
-                            except Exception as e:
-                                logger.error(f"❌ Ошибка отправки: {e}")
-                    await asyncio.sleep(2)
-                except Exception as e:
-                    logger.error(f"❌ Ошибка мониторинга {url}: {e}")
-        self.save_user_data()
-        logger.info("✅ Мониторинг завершен")
-    
-    async def run_monitoring_loop(self):
-        while True:
-            await self.monitor_prices()
-            await asyncio.sleep(1800)
-    
-    def run(self):
-        logger.info("🚀 VK бот запущен!")
-        import threading
-        monitor_thread = threading.Thread(
-            target=lambda: asyncio.run(self.run_monitoring_loop()),
-            daemon=True
-        )
-        monitor_thread.start()
-        
-        for event in self.longpoll.listen():
-            if event.type == VkEventType.MESSAGE_NEW and event.to_me:
-                try:
-                    self.handle_message(event)
-                except Exception as e:
-                    logger.error(f"❌ Ошибка обработки: {e}")
+# ---------- Расчёт сметы ----------
+@dp.message_handler(lambda message: message.text == '🧮 Рассчитать смету')
+async def estimate_start(message: types.Message):
+    await message.answer("Выберите тип помещения:", reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(
+        KeyboardButton('Квартира'), KeyboardButton('Дом'), KeyboardButton('Офис')
+    ))
+    await EstimateState.room_type.set()
 
+@dp.message_handler(state=EstimateState.room_type)
+async def estimate_room_type(message: types.Message, state: FSMContext):
+    await state.update_data(room_type=message.text)
+    await message.answer("Укажите площадь в квадратных метрах:", reply_markup=types.ReplyKeyboardRemove())
+    await EstimateState.area.set()
 
+@dp.message_handler(state=EstimateState.area)
+async def estimate_area(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, введите число (только цифры).")
+        return
+    await state.update_data(area=int(message.text))
+    # Выбор типа работ
+    markup = ReplyKeyboardMarkup(resize_keyboard=True).add(
+        KeyboardButton('Косметический'), KeyboardButton('Капитальный'), KeyboardButton('Дизайнерский')
+    )
+    await message.answer("Выберите вид ремонта:", reply_markup=markup)
+    await EstimateState.work_type.set()
+
+@dp.message_handler(state=EstimateState.work_type)
+async def estimate_work_type(message: types.Message, state: FSMContext):
+    await state.update_data(work_type=message.text)
+    data = await state.get_data()
+    # Простой расчёт (для примера)
+    base_price = 0
+    if data['work_type'] == 'Косметический':
+        base_price = 3000
+    elif data['work_type'] == 'Капитальный':
+        base_price = 7000
+    elif data['work_type'] == 'Дизайнерский':
+        base_price = 12000
+    total = data['area'] * base_price
+    await message.answer(
+        f"💰 Примерная стоимость ремонта:\n"
+        f"Помещение: {data['room_type']}\n"
+        f"Площадь: {data['area']} м²\n"
+        f"Вид ремонта: {data['work_type']}\n"
+        f"ИТОГО: {total:,} руб.\n\n"
+        f"*Точная смета после выезда замерщика.",
+        reply_markup=main_menu
+    )
+    await state.finish()
+
+# ---------- Подбор материалов с реферальной ссылкой ----------
+@dp.message_handler(lambda message: message.text == '🛒 Подобрать материалы')
+async def materials(message: types.Message):
+    # Инлайн-кнопки с категориями материалов
+    inline_kb = InlineKeyboardMarkup(row_width=2)
+    inline_kb.add(
+        InlineKeyboardButton('Обои', url=REFERRAL_LINK_MATERIALS),
+        InlineKeyboardButton('Краска', url=REFERRAL_LINK_MATERIALS),
+        InlineKeyboardButton('Плитка', url=REFERRAL_LINK_MATERIALS),
+        InlineKeyboardButton('Ламинат', url=REFERRAL_LINK_MATERIALS),
+        InlineKeyboardButton('Сантехника', url=REFERRAL_LINK_MATERIALS),
+        InlineKeyboardButton('Инструменты', url=REFERRAL_LINK_MATERIALS)
+    )
+    await message.answer(
+        "Выберите категорию материалов для покупки (цены и наличие на сайте партнёра):",
+        reply_markup=inline_kb
+    )
+
+# ---------- Портфолио ----------
+@dp.message_handler(lambda message: message.text == '📸 Портфолио')
+async def portfolio(message: types.Message):
+    # Здесь можно прислать фото (media group) или ссылку на альбом
+    # Для примера отправим одно фото из интернета
+    await bot.send_photo(
+        chat_id=message.chat.id,
+        photo='https://example.com/photo1.jpg',
+        caption='Ремонт квартиры 45 м² в современном стиле'
+    )
+    await message.answer("Больше примеров работ на нашем сайте: https://example.com/portfolio")
+
+# ---------- Вызов замерщика ----------
+@dp.message_handler(lambda message: message.text == '📞 Вызвать замерщика')
+async def call_measurer(message: types.Message):
+    # Собираем контакт (в данном случае просто номер телефона через контактную кнопку)
+    contact_keyboard = ReplyKeyboardMarkup(resize_keyboard=True).add(
+        KeyboardButton('📱 Отправить номер телефона', request_contact=True)
+    )
+    await message.answer(
+        "Для вызова замерщика нажмите кнопку ниже и отправьте ваш номер телефона.\n"
+        "Мы перезвоним в течение 15 минут.",
+        reply_markup=contact_keyboard
+    )
+
+@dp.message_handler(content_types=types.ContentType.CONTACT)
+async def handle_contact(message: types.Message):
+    contact = message.contact
+    # Здесь можно сохранить заявку в БД или отправить менеджеру
+    # Для примера просто ответим пользователю
+    await message.answer(
+        f"Спасибо, {contact.first_name}! Ваш номер {contact.phone_number} принят. Менеджер свяжется с вами в ближайшее время.",
+        reply_markup=main_menu
+    )
+    # Также можно отправить уведомление админу (например, в личку)
+    await bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"Новая заявка на замер: {contact.first_name} {contact.phone_number}")
+
+# ---------- Запуск ----------
 if __name__ == '__main__':
-    # Ваши данные уже подставлены!
-    bot = VKAutoMonitorBot(VK_TOKEN, GROUP_ID)
-    bot.run()
+    executor.start_polling(dp, skip_updates=True)
