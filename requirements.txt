@@ -1,3 +1,2 @@
-vk-api
-aiohttp
-beautifulsoup4
+vkbottle
+google-generativeai
