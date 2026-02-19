@@ -1,2 +1,2 @@
-vkbottle>=5.0.0
+vkbottle==4.6.2
 google-genai
