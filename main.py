@@ -2,15 +2,15 @@ import os
 import logging
 import asyncio
 from google import genai
-from vkbottle import Bot, Message
-from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
+from vkbottle import Bot, Keyboard, KeyboardButtonColor, Text, OpenLink
+from vkbottle.dispatch import Message                     # <-- правильный импорт Message
 from vkbottle.dispatch.dispenser import BaseStateGroup
 
-# ---------- ТОКЕНЫ (ВСТАВЬТЕ СВОИ) ----------
+# ---------- ТОКЕНЫ ----------
 VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
 GEMINI_API_KEY = "AIzaSyAzW2TzaCS14ahwW0-XCZM0bWS36KfaZLc"
 REFERRAL_LINK = "https://ad.admitad.com/your-referral-link"
-# ------------------------------------------------
+# ----------------------------
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 bot = Bot(token=VK_TOKEN)
@@ -134,10 +134,10 @@ async def ai_estimate_process(message: Message):
 """
 
     try:
-        # Здесь находится строка с моделью! Меняйте название модели при необходимости
+        # Используем стабильную модель gemini-1.5-flash
         response = await asyncio.to_thread(
             lambda: client.models.generate_content(
-                model='gemini-1.5-flash',   # <--- замените на нужную модель
+                model='gemini-1.5-flash',   # можно заменить на другую
                 contents=prompt
             )
         )
