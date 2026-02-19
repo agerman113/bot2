@@ -1,18 +1,16 @@
 import os
 import logging
 import asyncio
-from google import genai  # новая библиотека
+from google import genai
 from vkbottle import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, OpenLink
-from vkbottle.dispatch.dispenser import BaseStateGroup  # правильный импорт состояний
+from vkbottle.dispatch.dispenser import BaseStateGroup
 
-# ---------- ПОЛУЧЕНИЕ ТОКЕНОВ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ----------
-VK_TOKEN = os.getenv("VK_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-REFERRAL_LINK = os.getenv("REFERRAL_LINK", "https://ad.admitad.com/your-referral-link")
-
-if not VK_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("Не заданы VK_TOKEN или GEMINI_API_KEY в переменных окружения")
+# ======================== ТОКЕНЫ (ВСТАВЛЕНЫ ВРУЧНУЮ) ========================
+VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
+GEMINI_API_KEY = "AIzaSyAzW2TzaCS14ahwW0-XCZM0bWS36KfaZLc"
+REFERRAL_LINK = "https://ad.admitad.com/your-referral-link"   # замените на свою партнёрскую ссылку
+# ============================================================================
 
 # Настройка Gemini (новая библиотека)
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -114,7 +112,7 @@ async def estimate_work_type(message: Message):
     )
     await bot.state_dispenser.delete(message.peer_id)
 
-# ---------- ПОМОЩЬ ИИ В СОСТАВЛЕНИИ СМЕТЫ ----------
+# ---------- ПОМОЩЬ ИИ ----------
 @bot.on.message(text="🤖 Помощь ИИ в смете")
 async def ai_estimate_start(message: Message):
     await bot.state_dispenser.set(message.peer_id, EstimateStates.AI_DESCRIPTION)
@@ -128,7 +126,6 @@ async def ai_estimate_process(message: Message):
     user_text = message.text
     await message.answer("⏳ Генерирую смету с помощью ИИ... Это займёт несколько секунд.")
 
-    # Промпт для Gemini
     prompt = f"""
 Ты — помощник в составлении строительных смет. На основе описания клиента составь примерную смету ремонта.
 
@@ -144,10 +141,9 @@ async def ai_estimate_process(message: Message):
 """
 
     try:
-        # Новый API: client.models.generate_content
         response = await asyncio.to_thread(
             lambda: client.models.generate_content(
-                model='gemini-2.0-flash-exp',  # или 'gemini-1.5-flash', уточните доступные модели
+                model='gemini-2.0-flash-exp',
                 contents=prompt
             )
         )
@@ -156,7 +152,6 @@ async def ai_estimate_process(message: Message):
         logging.error(f"Ошибка Gemini: {e}")
         answer = "😕 Не удалось получить ответ от ИИ. Попробуйте позже или опишите короче."
 
-    # Отправляем результат с реферальной ссылкой
     await message.answer(
         f"🧠 **Смета от ИИ**\n\n{answer}\n\n---\nДля закупки материалов рекомендуем проверенный магазин: {REFERRAL_LINK}",
         keyboard=main_keyboard,
