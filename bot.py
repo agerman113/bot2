@@ -13,26 +13,31 @@ logger = logging.getLogger(__name__)
 # Чтение переменных окружения
 VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
-ZAI_API_KEY = os.getenv('ZAI_API_KEY')
+ZAI_API_KEY = os.getenv('ZAI_API_KEY')  # ожидается формат: {API Key ID}.{secret}
 
-# Константы для Z.ai API
-# Уточните endpoint у провайдера. Обычно это:
-ZAI_API_URL = "https://api.z.ai/v1/chat/completions"   # или другой URL, если указан в документации
-ZAI_MODEL = "glm-4.7-flash"   # или "glm-4.7", "glm-4-plus" и т.д. – выберите нужную
+# Настройки Z.ai (можете менять под документацию)
+ZAI_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"  # Часто используемый URL для Zhipu AI
+ZAI_MODEL = "glm-4-flash"  # Популярная модель
+ZAI_AUTH_HEADER = "Authorization"  # или "api-key"
+ZAI_AUTH_PREFIX = "Bearer"  # оставить пустым, если используете "api-key"
 
 def get_keyboard():
-    """Клавиатура с одной кнопкой для анекдота"""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button('😂 Анекдот', color=VkKeyboardColor.POSITIVE)
     return keyboard.get_keyboard()
 
 def generate_joke():
-    """Запрос к Z.ai на генерацию анекдота через HTTP"""
     if not ZAI_API_KEY:
         return "❌ Ключ API Z.ai не настроен."
 
+    # Формируем заголовок авторизации
+    if ZAI_AUTH_PREFIX:
+        auth_value = f"{ZAI_AUTH_PREFIX} {ZAI_API_KEY}"
+    else:
+        auth_value = ZAI_API_KEY
+
     headers = {
-        "Authorization": f"Bearer {ZAI_API_KEY}",
+        ZAI_AUTH_HEADER: auth_value,
         "Content-Type": "application/json"
     }
 
@@ -47,13 +52,19 @@ def generate_joke():
     }
 
     try:
+        logger.info(f"Отправка запроса к {ZAI_API_URL} с моделью {ZAI_MODEL}")
         response = requests.post(ZAI_API_URL, headers=headers, json=payload, timeout=30)
-        response.raise_for_status()  # выбросит исключение при HTTP ошибке
-
+        response.raise_for_status()
         result = response.json()
-        joke = result['choices'][0]['message']['content'].strip()
 
-        # Обрезаем, если слишком длинный (лимит ВК ~4096 символов)
+        # Извлекаем текст ответа (структура как у OpenAI)
+        if 'choices' in result and len(result['choices']) > 0:
+            joke = result['choices'][0]['message']['content'].strip()
+        elif 'response' in result:
+            joke = result['response'].strip()
+        else:
+            joke = str(result)
+
         if len(joke) > 4000:
             joke = joke[:4000] + "..."
 
@@ -61,10 +72,12 @@ def generate_joke():
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Ошибка HTTP запроса: {e}")
-        return "⚠️ Не удалось связаться с сервером Z.ai. Попробуйте позже."
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
-        logger.error(f"Ошибка парсинга ответа: {e}, ответ: {response.text if 'response' in locals() else 'нет ответа'}")
-        return "⚠️ Получен некорректный ответ от Z.ai."
+        if hasattr(e, 'response') and e.response:
+            logger.error(f"Тело ответа: {e.response.text}")
+        return f"⚠️ Ошибка связи с API: {e}"
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка: {e}")
+        return "⚠️ Не удалось получить анекдот."
 
 def main():
     if not VK_TOKEN or not GROUP_ID:
@@ -83,7 +96,6 @@ def main():
             user_id = msg['from_id']
             text = msg.get('text', '').lower()
 
-            # Проверяем, хочет ли пользователь анекдот
             if 'анекдот' in text or text == '😂 анекдот':
                 joke = generate_joke()
                 vk.messages.send(
@@ -93,7 +105,6 @@ def main():
                     random_id=0
                 )
             else:
-                # Если сообщение не про анекдот – предлагаем нажать кнопку
                 vk.messages.send(
                     user_id=user_id,
                     message="Привет! Я умею рассказывать анекдоты. Нажми кнопку ниже.",
