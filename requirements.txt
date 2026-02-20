@@ -1,2 +1,6 @@
 vk-api
 zhipuai
+sniffio
+anyio
+httpcore
+httpx
