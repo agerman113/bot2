@@ -14,13 +14,20 @@ VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
 ZHIPUAI_API_KEY = os.getenv('ZHIPUAI_API_KEY')  # ключ в формате id.secret
 
+# Для отладки можно временно указать ключ здесь (НЕ ДЕЛАЙТЕ ТАК В ПРОДАКШЕНЕ)
+# ZHIPUAI_API_KEY = "ваш_ключ_сюда"
+
 # Инициализация клиента ZhipuAI
 if ZHIPUAI_API_KEY:
-    client = ZhipuAI(api_key=ZHIPUAI_API_KEY)
-    logger.info("ZhipuAI клиент создан")
+    try:
+        client = ZhipuAI(api_key=ZHIPUAI_API_KEY)
+        logger.info("ZhipuAI клиент создан")
+    except Exception as e:
+        logger.error(f"Ошибка при создании клиента ZhipuAI: {e}")
+        client = None
 else:
     client = None
-    logger.error("ZHIPUAI_API_KEY не задан!")
+    logger.error("ZHIPUAI_API_KEY не задан! Бот будет работать без генерации анекдотов.")
 
 def get_keyboard():
     """Клавиатура с одной кнопкой для анекдота"""
@@ -34,9 +41,8 @@ def generate_joke():
         return "❌ API-клиент не инициализирован. Проверьте ключ."
 
     try:
-        # Формируем запрос к модели
         response = client.chat.completions.create(
-            model="glm-4-flash",  # Можно заменить на "glm-4", "glm-4v" и т.д.
+            model="glm-4-flash",  # можно заменить на "glm-4", "glm-4v" и т.д.
             messages=[
                 {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты на русском языке. Отвечай только текстом анекдота, без пояснений."},
                 {"role": "user", "content": "Расскажи короткий смешной анекдот."}
@@ -46,7 +52,6 @@ def generate_joke():
             stream=False
         )
 
-        # Извлекаем текст ответа
         joke = response.choices[0].message.content.strip()
 
         # Обрезаем, если слишком длинный (лимит ВК ~4096 символов)
