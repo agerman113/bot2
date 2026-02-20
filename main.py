@@ -2,17 +2,14 @@ import os
 import logging
 import asyncio
 from google import genai
-
-# Правильные импорты для vkbottle 4.6.2
 from vkbottle import Bot, Keyboard, KeyboardButtonColor, Text, OpenLink
-from vkbottle.dispatch.events import Message                # <-- Message отсюда
 from vkbottle.dispatch.dispenser import BaseStateGroup
 
-# ---------- ТОКЕНЫ ----------
+# ---------- ТОКЕНЫ (ЗАМЕНИТЕ НА НОВЫЕ ПОСЛЕ СБРОСА) ----------
 VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
 GEMINI_API_KEY = "AIzaSyAzW2TzaCS14ahwW0-XCZM0bWS36KfaZLc"
 REFERRAL_LINK = "https://ad.admitad.com/your-referral-link"
-# ----------------------------
+# --------------------------------------------------------------
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 bot = Bot(token=VK_TOKEN)
@@ -24,6 +21,7 @@ class EstimateStates(BaseStateGroup):
     WORK_TYPE = 2
     AI_DESCRIPTION = 3
 
+# ---------- КЛАВИАТУРЫ ----------
 main_keyboard = (
     Keyboard(one_time=False, inline=False)
     .add(Text("🧮 Рассчитать смету (обычный)"), color=KeyboardButtonColor.PRIMARY)
@@ -53,8 +51,9 @@ work_keyboard = (
     .get_json()
 )
 
+# ---------- ОБРАБОТЧИКИ (БЕЗ АННОТАЦИЙ ТИПОВ) ----------
 @bot.on.message()
-async def start(message: Message):
+async def start(message):
     if await bot.state_dispenser.get(message.peer_id):
         return
     await message.answer(
@@ -63,12 +62,12 @@ async def start(message: Message):
     )
 
 @bot.on.message(text="🧮 Рассчитать смету (обычный)")
-async def estimate_start(message: Message):
+async def estimate_start(message):
     await bot.state_dispenser.set(message.peer_id, EstimateStates.ROOM_TYPE)
     await message.answer("Выберите тип помещения:", keyboard=room_keyboard)
 
 @bot.on.message(state=EstimateStates.ROOM_TYPE)
-async def estimate_room_type(message: Message):
+async def estimate_room_type(message):
     if message.text not in ["Квартира", "Дом", "Офис"]:
         await message.answer("Пожалуйста, выберите один из вариантов на клавиатуре.")
         return
@@ -76,7 +75,7 @@ async def estimate_room_type(message: Message):
     await message.answer("Укажите площадь в квадратных метрах (только число):", keyboard=Keyboard.get_empty())
 
 @bot.on.message(state=EstimateStates.AREA)
-async def estimate_area(message: Message):
+async def estimate_area(message):
     if not message.text.isdigit():
         await message.answer("Пожалуйста, введите число (только цифры).")
         return
@@ -85,7 +84,7 @@ async def estimate_area(message: Message):
     await message.answer("Выберите вид ремонта:", keyboard=work_keyboard)
 
 @bot.on.message(state=EstimateStates.WORK_TYPE)
-async def estimate_work_type(message: Message):
+async def estimate_work_type(message):
     if message.text not in ["Косметический", "Капитальный", "Дизайнерский"]:
         await message.answer("Пожалуйста, выберите вид ремонта на клавиатуре.")
         return
@@ -109,7 +108,7 @@ async def estimate_work_type(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
 
 @bot.on.message(text="🤖 Помощь ИИ в смете")
-async def ai_estimate_start(message: Message):
+async def ai_estimate_start(message):
     await bot.state_dispenser.set(message.peer_id, EstimateStates.AI_DESCRIPTION)
     await message.answer(
         "Опишите словами, что вы хотите сделать (например: «нужно сделать ремонт в ванной 4 м², положить плитку на стены и пол, заменить унитаз и раковину»).",
@@ -117,7 +116,7 @@ async def ai_estimate_start(message: Message):
     )
 
 @bot.on.message(state=EstimateStates.AI_DESCRIPTION)
-async def ai_estimate_process(message: Message):
+async def ai_estimate_process(message):
     user_text = message.text
     await message.answer("⏳ Генерирую смету с помощью ИИ... Это займёт несколько секунд.")
 
@@ -155,7 +154,7 @@ async def ai_estimate_process(message: Message):
     await bot.state_dispenser.delete(message.peer_id)
 
 @bot.on.message(text="🛒 Подобрать материалы")
-async def materials(message: Message):
+async def materials(message):
     materials_keyboard = (
         Keyboard(inline=True)
         .add(OpenLink(REFERRAL_LINK, "Обои"))
@@ -174,7 +173,7 @@ async def materials(message: Message):
     )
 
 @bot.on.message(text="📸 Портфолио")
-async def portfolio(message: Message):
+async def portfolio(message):
     await message.answer(
         "Примеры наших работ:\n"
         "https://vk.com/album-123456789_123456789\n"
@@ -182,7 +181,7 @@ async def portfolio(message: Message):
     )
 
 @bot.on.message(text="📞 Вызвать замерщика")
-async def call_measurer(message: Message):
+async def call_measurer(message):
     await message.answer(
         "Для вызова замерщика напишите ваш номер телефона, и мы свяжемся с вами в ближайшее время.",
         keyboard=main_keyboard
