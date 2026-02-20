@@ -3,7 +3,7 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 import os
 import logging
-from openai import OpenAI
+import google.generativeai as genai
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -12,50 +12,40 @@ logger = logging.getLogger(__name__)
 # Чтение переменных окружения
 VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # ключ OpenAI
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # ключ от Google AI Studio
 
-# Инициализация клиента OpenAI
-if OPENAI_API_KEY:
+# Настройка Gemini
+if GEMINI_API_KEY:
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        logger.info("OpenAI клиент создан")
+        genai.configure(api_key=GEMINI_API_KEY)
+        # Выбираем модель (можно заменить)
+        model = genai.GenerativeModel('gemini-1.5-flash')  # или gemini-1.5-pro, gemini-pro
+        logger.info("Gemini клиент создан, модель: gemini-1.5-flash")
     except Exception as e:
-        logger.error(f"Ошибка при создании клиента OpenAI: {e}")
-        client = None
+        logger.error(f"Ошибка при создании клиента Gemini: {e}")
+        model = None
 else:
-    client = None
-    logger.error("OPENAI_API_KEY не задан! Бот будет работать без генерации анекдотов.")
+    model = None
+    logger.error("GEMINI_API_KEY не задан!")
 
 def get_keyboard():
-    """Клавиатура с одной кнопкой для анекдота"""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button('😂 Анекдот', color=VkKeyboardColor.POSITIVE)
     return keyboard.get_keyboard()
 
 def generate_joke():
-    """Генерация анекдота через OpenAI"""
-    if not client:
-        return "❌ API-клиент не инициализирован. Проверьте ключ OpenAI."
+    if not model:
+        return "❌ Gemini не инициализирован. Проверьте ключ."
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # можно заменить на "gpt-4" или другую
-            messages=[
-                {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты на русском языке. Отвечай только текстом анекдота, без пояснений."},
-                {"role": "user", "content": "Расскажи короткий смешной анекдот."}
-            ],
-            temperature=0.9,
-            max_tokens=500
-        )
+        prompt = "Расскажи короткий смешной анекдот на русском языке. Только текст анекдота, без пояснений."
+        response = model.generate_content(prompt)
+        joke = response.text.strip()
 
-        joke = response.choices[0].message.content.strip()
-
-        # Обрезаем, если слишком длинный (лимит ВК ~4096 символов)
         if len(joke) > 4000:
             joke = joke[:4000] + "..."
 
         return joke
-
     except Exception as e:
         logger.error(f"Ошибка при генерации анекдота: {e}")
         return f"⚠️ Ошибка: {e}"
@@ -69,7 +59,7 @@ def main():
     vk = vk_session.get_api()
     longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 
-    logger.info("Бот анекдотов (OpenAI) запущен!")
+    logger.info("Бот анекдотов (Gemini) запущен!")
 
     for event in longpoll.listen():
         if event.type == VkBotEventType.MESSAGE_NEW:
@@ -77,7 +67,6 @@ def main():
             user_id = msg['from_id']
             text = msg.get('text', '').lower()
 
-            # Проверяем, хочет ли пользователь анекдот
             if 'анекдот' in text or text == '😂 анекдот':
                 joke = generate_joke()
                 vk.messages.send(
@@ -87,7 +76,6 @@ def main():
                     random_id=0
                 )
             else:
-                # Если сообщение не про анекдот – предлагаем нажать кнопку
                 vk.messages.send(
                     user_id=user_id,
                     message="Привет! Я умею рассказывать анекдоты. Нажми кнопку ниже.",
