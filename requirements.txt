@@ -1,2 +1,1 @@
 vkbottle==4.6.2
-google-genai
