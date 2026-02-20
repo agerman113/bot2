@@ -42,7 +42,7 @@ def generate_joke():
 
     try:
         response = client.chat.completions.create(
-            model="glm-4-0520",  # можно заменить на "glm-4", "glm-4v" и т.д.
+            model="glm-4-air",  # можно заменить на "glm-4", "glm-4v" и т.д.
             messages=[
                 {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты на русском языке. Отвечай только текстом анекдота, без пояснений."},
                 {"role": "user", "content": "Расскажи короткий смешной анекдот."}
@@ -101,5 +101,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
