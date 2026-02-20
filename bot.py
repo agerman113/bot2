@@ -5,7 +5,7 @@ import os
 import json
 import logging
 from datetime import datetime
-import google.generativeai as genai
+from google import genai  # <-- НОВАЯ БИБЛИОТЕКА
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -16,11 +16,12 @@ GROUP_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-# Настройка Gemini
+# Настройка Gemini (новая версия)
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("Gemini API настроен")
+    genai_client = genai.Client(api_key=GEMINI_API_KEY)  # создаём клиент один раз
+    logger.info("Gemini API (google.genai) настроен")
 else:
+    genai_client = None
     logger.warning("GEMINI_API_KEY не задан. ИИ-консультант будет недоступен.")
 
 # Ваша ссылка на регистрацию ИП
@@ -1249,7 +1250,7 @@ def main():
                         'current_step': 0,
                         'completed_bundles': [],
                         'registration_time': datetime.now(),
-                        'ai_mode': False   # <-- добавили флаг режима ИИ
+                        'ai_mode': False   # флаг режима ИИ
                     }
 
                 # ===== РЕЖИМ ИИ-КОНСУЛЬТАНТА (перехватывает сообщения, если активен) =====
@@ -1266,7 +1267,7 @@ def main():
                         continue
 
                     # Если нет ключа — выходим из режима с ошибкой
-                    if not GEMINI_API_KEY:
+                    if not genai_client:
                         vk.messages.send(
                             user_id=user_id,
                             message="❌ ИИ-консультант временно недоступен (не настроен API ключ).",
@@ -1293,8 +1294,11 @@ def main():
                         )
                         prompt = f"{system_context}\n\nВопрос пользователя: {text}"
 
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        response = model.generate_content(prompt)
+                        # Вызов Gemini через новый клиент
+                        response = genai_client.models.generate_content(
+                            model='gemini-1.5-flash',
+                            contents=prompt
+                        )
                         answer = response.text
 
                         # Обрезаем, если слишком длинный (лимит VK ~4096 символов)
