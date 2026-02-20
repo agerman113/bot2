@@ -5,6 +5,7 @@ import os
 import json
 import logging
 from datetime import datetime
+import google.generativeai as genai
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -13,6 +14,14 @@ logger = logging.getLogger(__name__)
 # Получение данных из переменных окружения
 GROUP_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+
+# Настройка Gemini
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    logger.info("Gemini API настроен")
+else:
+    logger.warning("GEMINI_API_KEY не задан. ИИ-консультант будет недоступен.")
 
 # Ваша ссылка на регистрацию ИП
 IP_LINK = "https://vk.cc/cU6ZTa"
@@ -1094,6 +1103,7 @@ def get_main_keyboard():
     keyboard.add_button('📝 Оформить ИП', color=VkKeyboardColor.PRIMARY)
     keyboard.add_line()
     keyboard.add_button('ℹ️ Инфо о проекте', color=VkKeyboardColor.SECONDARY)
+    keyboard.add_button('🤖 ИИ-консультант', color=VkKeyboardColor.PRIMARY)   # НОВАЯ КНОПКА
 
     return keyboard.get_keyboard()
 
@@ -1238,9 +1248,74 @@ def main():
                         'current_bundle': None,
                         'current_step': 0,
                         'completed_bundles': [],
-                        'registration_time': datetime.now()
+                        'registration_time': datetime.now(),
+                        'ai_mode': False   # <-- добавили флаг режима ИИ
                     }
 
+                # ===== РЕЖИМ ИИ-КОНСУЛЬТАНТА (перехватывает сообщения, если активен) =====
+                if user_progress[user_id].get('ai_mode'):
+                    # Команды выхода
+                    if text in ['выйти', 'стоп', 'отмена', 'exit', 'stop']:
+                        user_progress[user_id]['ai_mode'] = False
+                        vk.messages.send(
+                            user_id=user_id,
+                            message="✅ Вы вышли из режима ИИ-консультанта. Возвращайтесь, если появятся вопросы!",
+                            keyboard=get_main_keyboard(),
+                            random_id=0
+                        )
+                        continue
+
+                    # Если нет ключа — выходим из режима с ошибкой
+                    if not GEMINI_API_KEY:
+                        vk.messages.send(
+                            user_id=user_id,
+                            message="❌ ИИ-консультант временно недоступен (не настроен API ключ).",
+                            random_id=0
+                        )
+                        user_progress[user_id]['ai_mode'] = False
+                        continue
+
+                    # Сообщаем, что начали обработку
+                    vk.messages.send(
+                        user_id=user_id,
+                        message="⏳ Думаю над ответом...",
+                        random_id=0
+                    )
+
+                    try:
+                        # Контекст для модели
+                        system_context = (
+                            "Ты - дружелюбный ИИ-помощник, который помогает пользователям разобраться "
+                            "в работе бота-наставника по партнерским программам. Бот содержит 15 связок "
+                            "для заработка, информацию об авторе, оформлении ИП. Отвечай кратко, по делу, "
+                            "давай советы по использованию связок. Если вопрос не по теме, мягко направляй "
+                            "к теме бота."
+                        )
+                        prompt = f"{system_context}\n\nВопрос пользователя: {text}"
+
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        response = model.generate_content(prompt)
+                        answer = response.text
+
+                        # Обрезаем, если слишком длинный (лимит VK ~4096 символов)
+                        if len(answer) > 4000:
+                            answer = answer[:4000] + "..."
+
+                        vk.messages.send(
+                            user_id=user_id,
+                            message=f"🤖 *ИИ-консультант:*\n\n{answer}\n\n_Чтобы задать ещё вопрос, просто напишите. Для выхода напишите 'выйти'._",
+                            random_id=0
+                        )
+                    except Exception as e:
+                        logger.error(f"Ошибка Gemini API: {e}")
+                        vk.messages.send(
+                            user_id=user_id,
+                            message="❌ Произошла ошибка при обращении к ИИ. Попробуйте позже.",
+                            random_id=0
+                        )
+                    continue   # после ответа ИИ не обрабатываем другие команды
+
+                # ===== ДАЛЬШЕ ИДУТ ВСЕ СТАРЫЕ ОБРАБОТЧИКИ =====
                 # УНИФИЦИРОВАННЫЙ ВХОД В ГЛАВНОЕ МЕНЮ
                 if (text in ['начать', 'старт', 'start', 'меню', 'привет', 'назад', 'главное меню', 'главное', 'домой', 'home', 'main'] or
                     '🔙 в главное меню' in text or
@@ -1289,6 +1364,7 @@ def main():
                         keyboard=get_bundles_keyboard(),
                         random_id=0
                     )
+                    continue
 
                 # Все связки (страница 1)
                 elif 'все связки' in text or '15 шт' in text:
@@ -1298,6 +1374,7 @@ def main():
                         keyboard=get_bundles_keyboard(),
                         random_id=0
                     )
+                    continue
 
                 # Вторая страница связок
                 elif 'еще связки' in text:
@@ -1307,6 +1384,7 @@ def main():
                         keyboard=get_bundles_keyboard_page2(),
                         random_id=0
                     )
+                    continue
 
                 # Назад к основным связкам
                 elif 'основные связки' in text:
@@ -1316,6 +1394,7 @@ def main():
                         keyboard=get_bundles_keyboard(),
                         random_id=0
                     )
+                    continue
 
                 # Инфо о проекте
                 elif 'инфо' in text or 'о проекте' in text:
@@ -1326,6 +1405,17 @@ def main():
                         random_id=0,
                         dont_parse_links=1
                     )
+                    continue
+
+                # ИИ-консультант
+                elif 'ии-консультант' in text or '🤖 ии-консультант' in text:
+                    user_progress[user_id]['ai_mode'] = True
+                    vk.messages.send(
+                        user_id=user_id,
+                        message="🧠 *Режим ИИ-консультанта активирован*\n\nЗадайте любой вопрос по работе с ботом, и я помогу советом.\nДля выхода напишите *'выйти'*, *'стоп* или *'отмена'*.",
+                        random_id=0
+                    )
+                    continue
 
                 # К выбору связки
                 elif 'к выбору связки' in text or '🔙 к выбору связки' in text:
@@ -1338,6 +1428,7 @@ def main():
                         keyboard=get_bundles_keyboard(),
                         random_id=0
                     )
+                    continue
 
                 # Обработка выбора связки
                 elif any(phrase in text for phrase in [
@@ -1434,9 +1525,9 @@ def main():
                             keyboard=keyboard,
                             random_id=0
                         )
+                    continue
 
                 # ОФОРМИТЬ ИП - ИСПРАВЛЕННАЯ ПРОВЕРКА
-                # Важно: эта проверка должна быть ПОСЛЕ проверки связок
                 elif any(ip_text in text for ip_text in ['оформить ип', 'ип']):
                     # Дополнительная проверка: если текст содержит "дипломы-vs", это не кнопка ИП
                     if any(phrase in text for phrase in ['s-дипломы-vs', 'с-дипломы-vs', 'дипломы-vs']):
@@ -1450,6 +1541,7 @@ def main():
                             random_id=0,
                             dont_parse_links=1
                         )
+                    continue
 
                 # Перейти по ссылке
                 elif 'перейти по ссылке' in text:
@@ -1478,6 +1570,7 @@ def main():
                                 random_id=0,
                                 dont_parse_links=1
                             )
+                    continue
 
                 # Шаг выполнен
                 elif 'шаг выполнен' in text:
@@ -1500,6 +1593,7 @@ def main():
                                 message=response,
                                 random_id=0
                             )
+                    continue
 
                 # Следующий шаг
                 elif 'следующий шаг' in text:
@@ -1561,6 +1655,7 @@ def main():
                                 keyboard=get_main_keyboard(),
                                 random_id=0
                             )
+                    continue
 
                 # Все шаги связки
                 elif 'все шаги связки' in text:
@@ -1585,6 +1680,7 @@ def main():
                             message=response,
                             random_id=0
                         )
+                    continue
 
                 # Завершить связку
                 elif 'завершить связку' in text:
@@ -1622,11 +1718,10 @@ def main():
 
                         user_progress[user_id]['current_bundle'] = None
                         user_progress[user_id]['current_step'] = 0
+                    continue
 
     except Exception as e:
         logger.error(f"Ошибка в боте: {e}", exc_info=True)
 
 if __name__ == '__main__':
     main()
-
-
