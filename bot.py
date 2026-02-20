@@ -23,21 +23,19 @@ else:
     logger.error("GEMINI_API_KEY не задан!")
 
 def get_keyboard():
-    """Клавиатура с одной кнопкой для анекдота"""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button('😂 Анекдот', color=VkKeyboardColor.POSITIVE)
     return keyboard.get_keyboard()
 
 def generate_joke():
-    """Запрос к Gemini на генерацию анекдота"""
     try:
         prompt = "Расскажи короткий смешной анекдот на русском языке. Без лишних слов, только текст анекдота."
+        # ИСПРАВЛЕНО: используем актуальную модель
         response = genai_client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.0-flash-exp',  # <-- Новая модель
             contents=prompt
         )
         joke = response.text.strip()
-        # Если ответ слишком длинный, обрезаем (лимит ВК ~4096 символов)
         if len(joke) > 4000:
             joke = joke[:4000] + "..."
         return joke
@@ -62,7 +60,6 @@ def main():
             user_id = msg['from_id']
             text = msg.get('text', '').lower()
 
-            # Если нет клиента Gemini – уведомляем
             if not genai_client:
                 vk.messages.send(
                     user_id=user_id,
@@ -71,9 +68,7 @@ def main():
                 )
                 continue
 
-            # Проверяем, хочет ли пользователь анекдот
             if 'анекдот' in text or text == '😂 анекдот':
-                # Генерируем анекдот
                 joke = generate_joke()
                 vk.messages.send(
                     user_id=user_id,
@@ -82,7 +77,6 @@ def main():
                     random_id=0
                 )
             else:
-                # Если сообщение не про анекдот – предлагаем нажать кнопку
                 vk.messages.send(
                     user_id=user_id,
                     message="Привет! Я умею рассказывать анекдоты. Нажми кнопку ниже.",
