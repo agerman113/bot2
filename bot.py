@@ -3,7 +3,8 @@ from vk_api.bot_longpoll import VkBotLongPoll, VkBotEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 import os
 import logging
-from zai import ZaiClient
+import requests
+import json
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -14,13 +15,10 @@ VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
 ZAI_API_KEY = os.getenv('ZAI_API_KEY')
 
-# Настройка Z.ai клиента
-if ZAI_API_KEY:
-    zai_client = ZaiClient(api_key=ZAI_API_KEY)
-    logger.info("Z.ai клиент создан")
-else:
-    zai_client = None
-    logger.error("ZAI_API_KEY не задан!")
+# Константы для Z.ai API
+# Уточните endpoint у провайдера. Обычно это:
+ZAI_API_URL = "https://api.z.ai/v1/chat/completions"   # или другой URL, если указан в документации
+ZAI_MODEL = "glm-4.7-flash"   # или "glm-4.7", "glm-4-plus" и т.д. – выберите нужную
 
 def get_keyboard():
     """Клавиатура с одной кнопкой для анекдота"""
@@ -29,32 +27,44 @@ def get_keyboard():
     return keyboard.get_keyboard()
 
 def generate_joke():
-    """Запрос к Z.ai на генерацию анекдота"""
+    """Запрос к Z.ai на генерацию анекдота через HTTP"""
+    if not ZAI_API_KEY:
+        return "❌ Ключ API Z.ai не настроен."
+
+    headers = {
+        "Authorization": f"Bearer {ZAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": ZAI_MODEL,
+        "messages": [
+            {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты на русском языке."},
+            {"role": "user", "content": "Расскажи короткий смешной анекдот. Только текст анекдота, без пояснений."}
+        ],
+        "temperature": 0.9,
+        "max_tokens": 500
+    }
+
     try:
-        # Подготовка сообщения для модели
-        messages = [
-            {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты."},
-            {"role": "user", "content": "Расскажи короткий смешной анекдот на русском языке. Только текст анекдота, без пояснений."}
-        ]
-        
-        # Вызов API через SDK
-        response = zai_client.chat.completions.create(
-            model="glm-4.7-flash",  # Можно также использовать "glm-4.7"
-            messages=messages,
-            temperature=0.9,
-            max_tokens=500
-        )
-        
-        joke = response.choices[0].message.content.strip()
-        
+        response = requests.post(ZAI_API_URL, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()  # выбросит исключение при HTTP ошибке
+
+        result = response.json()
+        joke = result['choices'][0]['message']['content'].strip()
+
         # Обрезаем, если слишком длинный (лимит ВК ~4096 символов)
         if len(joke) > 4000:
             joke = joke[:4000] + "..."
-            
+
         return joke
-    except Exception as e:
-        logger.error(f"Ошибка при генерации анекдота: {e}")
-        return "Не удалось придумать анекдот. Попробуй ещё раз позже."
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка HTTP запроса: {e}")
+        return "⚠️ Не удалось связаться с сервером Z.ai. Попробуйте позже."
+    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        logger.error(f"Ошибка парсинга ответа: {e}, ответ: {response.text if 'response' in locals() else 'нет ответа'}")
+        return "⚠️ Получен некорректный ответ от Z.ai."
 
 def main():
     if not VK_TOKEN or not GROUP_ID:
@@ -73,18 +83,8 @@ def main():
             user_id = msg['from_id']
             text = msg.get('text', '').lower()
 
-            # Если нет клиента Z.ai – уведомляем
-            if not zai_client:
-                vk.messages.send(
-                    user_id=user_id,
-                    message="🤖 Генератор анекдотов временно недоступен (нет API ключа Z.ai).",
-                    random_id=0
-                )
-                continue
-
             # Проверяем, хочет ли пользователь анекдот
             if 'анекдот' in text or text == '😂 анекдот':
-                # Генерируем анекдот
                 joke = generate_joke()
                 vk.messages.send(
                     user_id=user_id,
