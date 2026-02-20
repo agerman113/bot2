@@ -1,8 +1,7 @@
 import logging
 from vkbottle import Bot
-from vkbottle.dispatch.events import Message
 
-# Токен VK (вставьте свой, лучше новый после сброса)
+# Токен VK (вставьте свой)
 VK_TOKEN = "vk1.a.B7T79NLqWQjMZtlHbzne5JP1jsC73w6hEoUWe_afiBGGm-feK986ztH-ebkSGj5Bd6qckSX7I2XMmQE4DcBpq2C7ofrNcb29bytWmWzDl7TAz38mY7XyX8qA1ivYhMJm5lW0RCHhXqg9yXyf24leFatY-h_wVHOnqEvFZVjfHonQQRFZZ698ZdL_cxV52970SZhKDa3T2xf8uk0-BpqnAQ"
 
 # Настройка логирования
@@ -11,9 +10,9 @@ logging.basicConfig(level=logging.INFO)
 # Создаём бота
 bot = Bot(token=VK_TOKEN)
 
-# Обработчик всех сообщений
+# Обработчик всех сообщений (без аннотации типа)
 @bot.on.message()
-async def echo_handler(message: Message):
+async def echo_handler(message):
     # Игнорируем сообщения от самого бота (чтобы не зациклиться)
     if message.from_id < 0:
         return
