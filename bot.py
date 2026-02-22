@@ -12,37 +12,35 @@ logger = logging.getLogger(__name__)
 # Чтение переменных окружения
 VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
-DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')  # ключ от DeepSeek
+QWEN_API_KEY = os.getenv('QWEN_API_KEY')  # ключ от DashScope
 
-# Инициализация клиента DeepSeek (через OpenAI SDK)
-if DEEPSEEK_API_KEY:
+# Инициализация клиента Qwen
+if QWEN_API_KEY:
     try:
         client = OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com/v1"  # важно: меняем адрес
+            api_key=QWEN_API_KEY,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"  # endpoint Qwen
         )
-        logger.info("DeepSeek клиент создан")
+        logger.info("Qwen клиент создан")
     except Exception as e:
-        logger.error(f"Ошибка при создании клиента DeepSeek: {e}")
+        logger.error(f"Ошибка при создании клиента Qwen: {e}")
         client = None
 else:
     client = None
-    logger.error("DEEPSEEK_API_KEY не задан!")
+    logger.error("QWEN_API_KEY не задан!")
 
 def get_keyboard():
-    """Клавиатура с одной кнопкой для анекдота"""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button('😂 Анекдот', color=VkKeyboardColor.POSITIVE)
     return keyboard.get_keyboard()
 
 def generate_joke():
-    """Генерация анекдота через DeepSeek"""
     if not client:
-        return "❌ API-клиент не инициализирован. Проверьте ключ DeepSeek."
+        return "❌ API-клиент не инициализирован. Проверьте ключ Qwen."
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",  # модель DeepSeek (бесплатная)
+            model="qwen-turbo",  # бесплатная модель, можно также "qwen-plus"
             messages=[
                 {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты на русском языке. Отвечай только текстом анекдота, без пояснений."},
                 {"role": "user", "content": "Расскажи короткий смешной анекдот."}
@@ -52,11 +50,8 @@ def generate_joke():
         )
 
         joke = response.choices[0].message.content.strip()
-
-        # Обрезаем, если слишком длинный (лимит ВК ~4096 символов)
         if len(joke) > 4000:
             joke = joke[:4000] + "..."
-
         return joke
 
     except Exception as e:
@@ -72,7 +67,7 @@ def main():
     vk = vk_session.get_api()
     longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 
-    logger.info("Бот анекдотов (DeepSeek) запущен!")
+    logger.info("Бот анекдотов (Qwen) запущен!")
 
     for event in longpoll.listen():
         if event.type == VkBotEventType.MESSAGE_NEW:
@@ -80,7 +75,6 @@ def main():
             user_id = msg['from_id']
             text = msg.get('text', '').lower()
 
-            # Проверяем, хочет ли пользователь анекдот
             if 'анекдот' in text or text == '😂 анекдот':
                 joke = generate_joke()
                 vk.messages.send(
@@ -90,7 +84,6 @@ def main():
                     random_id=0
                 )
             else:
-                # Если сообщение не про анекдот – предлагаем нажать кнопку
                 vk.messages.send(
                     user_id=user_id,
                     message="Привет! Я умею рассказывать анекдоты. Нажми кнопку ниже.",
