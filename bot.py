@@ -12,35 +12,50 @@ logger = logging.getLogger(__name__)
 # Чтение переменных окружения
 VK_TOKEN = os.getenv('VK_GROUP_TOKEN')
 GROUP_ID = os.getenv('VK_GROUP_ID')
-QWEN_API_KEY = os.getenv('QWEN_API_KEY')  # ключ от DashScope
+OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # ключ от OpenRouter
 
-# Инициализация клиента Qwen
-if QWEN_API_KEY:
+# Настройки OpenRouter
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# Выберите модель из списка бесплатных: https://openrouter.ai/models?order=free
+MODEL_NAME = "mistralai/mistral-7b-instruct:free"  # можно заменить на другую бесплатную модель
+
+# Сайт и название для статистики OpenRouter (можно указать любые)
+YOUR_SITE_URL = "https://vk.com/your_bot_page"  # замените на адрес вашей группы или оставьте так
+YOUR_APP_NAME = "VK Joke Bot"
+
+# Инициализация клиента OpenRouter (через OpenAI SDK)
+if OPENROUTER_API_KEY:
     try:
         client = OpenAI(
-            api_key=QWEN_API_KEY,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"  # endpoint Qwen
+            base_url=OPENROUTER_BASE_URL,
+            api_key=OPENROUTER_API_KEY,
+            default_headers={
+                "HTTP-Referer": YOUR_SITE_URL,  # опционально, для статистики
+                "X-Title": YOUR_APP_NAME,       # опционально, для статистики
+            }
         )
-        logger.info("Qwen клиент создан")
+        logger.info(f"OpenRouter клиент создан, модель: {MODEL_NAME}")
     except Exception as e:
-        logger.error(f"Ошибка при создании клиента Qwen: {e}")
+        logger.error(f"Ошибка при создании клиента OpenRouter: {e}")
         client = None
 else:
     client = None
-    logger.error("QWEN_API_KEY не задан!")
+    logger.error("OPENROUTER_API_KEY не задан!")
 
 def get_keyboard():
+    """Клавиатура с одной кнопкой для анекдота"""
     keyboard = VkKeyboard(one_time=False)
     keyboard.add_button('😂 Анекдот', color=VkKeyboardColor.POSITIVE)
     return keyboard.get_keyboard()
 
 def generate_joke():
+    """Генерация анекдота через OpenRouter"""
     if not client:
-        return "❌ API-клиент не инициализирован. Проверьте ключ Qwen."
+        return "❌ API-клиент не инициализирован. Проверьте ключ OpenRouter."
 
     try:
         response = client.chat.completions.create(
-            model="qwen-turbo",  # бесплатная модель, можно также "qwen-plus"
+            model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": "Ты - дружелюбный помощник, который рассказывает смешные анекдоты на русском языке. Отвечай только текстом анекдота, без пояснений."},
                 {"role": "user", "content": "Расскажи короткий смешной анекдот."}
@@ -50,13 +65,24 @@ def generate_joke():
         )
 
         joke = response.choices[0].message.content.strip()
+
+        # Обрезаем, если слишком длинный (лимит ВК ~4096 символов)
         if len(joke) > 4000:
             joke = joke[:4000] + "..."
+
         return joke
 
     except Exception as e:
         logger.error(f"Ошибка при генерации анекдота: {e}")
-        return f"⚠️ Ошибка: {e}"
+        # Пытаемся извлечь детали ошибки из ответа
+        error_message = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_detail = e.response.json()
+                error_message = f"{e} - {error_detail}"
+            except:
+                pass
+        return f"⚠️ Ошибка: {error_message[:200]}"
 
 def main():
     if not VK_TOKEN or not GROUP_ID:
@@ -67,7 +93,7 @@ def main():
     vk = vk_session.get_api()
     longpoll = VkBotLongPoll(vk_session, GROUP_ID)
 
-    logger.info("Бот анекдотов (Qwen) запущен!")
+    logger.info("Бот анекдотов (OpenRouter) запущен!")
 
     for event in longpoll.listen():
         if event.type == VkBotEventType.MESSAGE_NEW:
@@ -75,6 +101,7 @@ def main():
             user_id = msg['from_id']
             text = msg.get('text', '').lower()
 
+            # Проверяем, хочет ли пользователь анекдот
             if 'анекдот' in text or text == '😂 анекдот':
                 joke = generate_joke()
                 vk.messages.send(
@@ -84,6 +111,7 @@ def main():
                     random_id=0
                 )
             else:
+                # Если сообщение не про анекдот – предлагаем нажать кнопку
                 vk.messages.send(
                     user_id=user_id,
                     message="Привет! Я умею рассказывать анекдоты. Нажми кнопку ниже.",
