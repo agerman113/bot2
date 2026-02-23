@@ -17,7 +17,7 @@ OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # ключ от OpenRouter
 # Настройки OpenRouter
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # Выберите модель из списка бесплатных: https://openrouter.ai/models?order=free
-MODEL_NAME = "google/gemini-2.0-flash-exp:free"  # можно заменить на другую бесплатную модель
+MODEL_NAME = "qwen/qwen-2.5-7b-instruct:free"  # можно заменить на другую бесплатную модель
 
 # Сайт и название для статистики OpenRouter (можно указать любые)
 YOUR_SITE_URL = "https://vk.com/your_bot_page"  # замените на адрес вашей группы или оставьте так
@@ -121,4 +121,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
