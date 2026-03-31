@@ -11,7 +11,7 @@ import yt_dlp
 from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
 import vk_api
-from vk_api.upload import VkUpload
+import requests
 
 load_dotenv()
 
@@ -37,7 +37,6 @@ class VKYouTubeReposter:
 
         self.vk_session = vk_api.VkApi(token=self.vk_token)
         self.vk = self.vk_session.get_api()
-        self.upload = VkUpload(self.vk_session)
 
         self.openai_client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -91,10 +90,9 @@ class VKYouTubeReposter:
             return False
 
     def download_video(self, url, output_path="temp_video.mp4"):
-        # Используем готовый mp4 (не требует FFmpeg)
         ydl_opts = {
             'outtmpl': output_path,
-            'format': 'best[ext=mp4]',   # уже смешанный, без FFmpeg
+            'format': 'best[ext=mp4]',
             'quiet': True,
             'no_warnings': True,
         }
@@ -123,31 +121,38 @@ class VKYouTubeReposter:
                     max_tokens=200,
                 )
                 ai_text = response.choices[0].message.content
-                if ai_text is None:
-                    raise ValueError("AI returned None")
+                if ai_text is None or not ai_text.strip():
+                    raise ValueError("Empty AI response")
                 ai_text = ai_text.strip()
-                if not ai_text:
-                    raise ValueError("Empty response")
                 return f"{ai_text}\n\n{self.ad_text}"
             except (RateLimitError, Exception) as e:
                 logging.warning(f"AI attempt {attempt+1} failed: {e}")
                 time.sleep(10 * (attempt + 1))
-        # fallback
         return f"😄 Смешное видео: {video_title}\n\n#юмор #shorts\n\n{self.ad_text}"
 
     def post_to_vk(self, video_path, description):
         try:
-            # Без is_clip – загружаем как обычное видео на стену
-            video_data = self.upload.video(
-                video_file=video_path,
+            # Получаем URL для загрузки
+            save_data = self.vk.video.save(
                 name=os.path.basename(video_path),
                 description=description,
                 group_id=int(self.vk_group_id),
                 is_private=0,
-                wallpost=1,
+                wallpost=1
             )
-            url = f"https://vk.com/video{video_data['owner_id']}_{video_data['video_id']}"
-            logging.info(f"Published: {url}")
+            upload_url = save_data['upload_url']
+            video_id = save_data['video_id']
+            owner_id = save_data['owner_id']
+
+            # Загружаем файл
+            with open(video_path, 'rb') as f:
+                files = {'video_file': f}
+                response = requests.post(upload_url, files=files)
+            if response.status_code != 200:
+                raise Exception(f"Upload failed with status {response.status_code}")
+
+            video_url = f"https://vk.com/video{owner_id}_{video_id}"
+            logging.info(f"Published: {video_url}")
             return True
         except Exception as e:
             logging.error(f"VK upload error: {e}")
