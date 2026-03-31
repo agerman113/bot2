@@ -1,5 +1,5 @@
 vk-api
-requests==2.31.0
-
-
-
+yt-dlp
+feedparser
+openai
+python-dotenv
