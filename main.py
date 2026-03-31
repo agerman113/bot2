@@ -4,6 +4,7 @@
 import os
 import sys
 import time
+import gc
 import logging
 import feedparser
 import yt_dlp
@@ -80,7 +81,7 @@ class VKYouTubeReposter:
             return None
 
     def is_vertical_video(self, url):
-        """Проверяет вертикальность (высота > ширина) и длительность <= max_duration"""
+        """Проверяет вертикальность и длительность (без скачивания)"""
         try:
             ydl_opts = {
                 'quiet': True,
@@ -89,18 +90,15 @@ class VKYouTubeReposter:
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                # Длительность
                 duration = info.get('duration', 0)
                 if duration > self.max_duration:
                     logging.info(f"Видео слишком длинное: {duration} сек (макс {self.max_duration})")
                     return False
 
-                # Размеры
                 width = info.get('width')
                 height = info.get('height')
                 if width and height:
                     return height > width
-                # Если нет прямых размеров, пробуем из форматов
                 formats = info.get('formats', [])
                 for f in formats:
                     if f.get('width') and f.get('height'):
@@ -113,14 +111,13 @@ class VKYouTubeReposter:
 
     def download_video(self, url, output_path="temp_video.mp4"):
         """
-        Скачивает видео с YouTube, используя готовый MP4 (не требует FFmpeg).
-        Если нет готового MP4, пробует другой формат.
+        Скачивает видео с ограничением высоты 480p (экономия памяти).
+        Не требует FFmpeg.
         """
         try:
-            # Сначала пробуем best[ext=mp4] - уже смешанный
             ydl_opts = {
                 'outtmpl': output_path,
-                'format': 'best[ext=mp4]/best',
+                'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best',
                 'quiet': True,
                 'no_warnings': True,
             }
@@ -134,14 +131,14 @@ class VKYouTubeReposter:
 
     def generate_description(self, video_title, video_url):
         prompt = f"""
-        Напиши короткое и привлекательное описание для смешного вертикального видео (YouTube Shorts), которое будет опубликовано в VK Клипах.
+        Напиши короткое и привлекательное описание для смешного вертикального видео (YouTube Shorts), которое будет опубликовано в VK.
         Оригинальное название видео: "{video_title}"
         Ссылка на видео: {video_url}
         
         Требования:
         - Язык: русский
         - Длина: 2-3 предложения
-        - Добавь 3-5 хэштегов (#юмор #shorts #вертикальноевидео и т.п.)
+        - Добавь 3-5 хэштегов (#юмор #shorts и т.п.)
         - Используй эмодзи
         - Не упоминай рекламу (она будет добавлена отдельно)
         """
@@ -169,7 +166,7 @@ class VKYouTubeReposter:
         return f"Смешное видео: {video_title}\n\n{self.ad_text}"
 
     def post_to_vk(self, video_path, description):
-        """Публикует видео как VK Клип (is_clip=1) на стену сообщества"""
+        """Публикует видео на стену сообщества (без is_clip для экономии памяти)"""
         try:
             video_data = self.upload.video(
                 video_file=video_path,
@@ -178,10 +175,10 @@ class VKYouTubeReposter:
                 group_id=int(self.vk_group_id),
                 is_private=0,
                 wallpost=1,
-                is_clip=1,          # загружаем как клип
+                # is_clip=1   # отключено, т.к. может вызывать ошибки
             )
             video_url = f"https://vk.com/video{video_data['owner_id']}_{video_data['video_id']}"
-            logging.info(f"Клип опубликован: {video_url}")
+            logging.info(f"Видео опубликовано: {video_url}")
             return True
         except Exception as e:
             logging.error(f"Ошибка публикации в VK: {e}")
@@ -199,15 +196,23 @@ class VKYouTubeReposter:
         if not video_file:
             return False
 
+        # Принудительная очистка памяти после скачивания
+        gc.collect()
+        time.sleep(1)
+
         description = self.generate_description(video_info["title"], video_info["url"])
         success = self.post_to_vk(video_file, description)
 
+        # Удаляем временный файл
         if os.path.exists(video_file):
             os.remove(video_file)
 
+        # Ещё раз сборка мусора
+        gc.collect()
+
         if success:
             self.save_processed_video(video_info["id"])
-            logging.info(f"Вертикальное видео {video_info['id']} успешно опубликовано как клип")
+            logging.info(f"Вертикальное видео {video_info['id']} успешно опубликовано")
         else:
             logging.error(f"Не удалось опубликовать видео {video_info['id']}")
         return success
@@ -247,6 +252,7 @@ if __name__ == "__main__":
                 description = bot.generate_description("Тестовое видео из Shorts", test_url)
                 bot.post_to_vk(video_file, description)
                 os.remove(video_file)
+                gc.collect()
                 logging.info("✅ Тестовая публикация завершена")
             else:
                 logging.error("❌ Не удалось скачать видео")
