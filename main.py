@@ -6,31 +6,30 @@ import logging
 import requests
 import feedparser
 import yt_dlp
+import vk_api
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class VKReposter:
     def __init__(self):
-        # Пробуем получить переменные из окружения
         self.token = os.getenv("VK_TOKEN")
         self.group_id = os.getenv("VK_GROUP_ID")
         self.channels = [ch.strip() for ch in os.getenv("CHANNEL_IDS", "").split(",") if ch]
         self.ad = os.getenv("AD_TEXT", "Заработок на партнёрках → https://vk.me/1onesis")
         self.interval = int(os.getenv("CHECK_INTERVAL", "600"))
         
-        # Диагностика – выводим значения (но токен показываем частично)
         logging.info(f"VK_TOKEN = {self.token[:10]}... (длина {len(self.token) if self.token else 0})")
         logging.info(f"VK_GROUP_ID = {self.group_id}")
         logging.info(f"CHANNEL_IDS = {self.channels}")
         
-        # Проверка с понятным сообщением
         if not self.token:
-            raise ValueError("VK_TOKEN не задан. Добавьте переменную окружения VK_TOKEN в панели bothost.ru")
+            raise ValueError("VK_TOKEN не задан")
         if not self.group_id:
-            raise ValueError("VK_GROUP_ID не задан. Добавьте переменную окружения VK_GROUP_ID")
-        if not self.channels:
-            logging.warning("CHANNEL_IDS не заданы – бот будет работать, но не будет отслеживать каналы")
+            raise ValueError("VK_GROUP_ID не задан")
+        
+        # Инициализация VK API
+        self.vk_session = vk_api.VkApi(token=self.token)
+        self.vk = self.vk_session.get_api()
         
         self.processed = self.load_processed()
         logging.info("Инициализация завершена")
@@ -89,31 +88,27 @@ class VKReposter:
             return None
 
     def upload_to_vk(self, video_path, desc):
-        params = {
-            "access_token": self.token,
-            "v": "5.131",
-            "name": os.path.basename(video_path),
-            "description": desc,
-            "group_id": self.group_id,
-            "is_private": 0,
-            "wallpost": 1
-        }
         try:
-            r = requests.get("https://api.vk.com/method/video.save", params=params).json()
-            if "error" in r:
-                logging.error(f"VK API error: {r['error']}")
-                return False
-            upload_url = r["response"]["upload_url"]
-            with open(video_path, "rb") as f:
-                files = {"video_file": f}
+            video_save = self.vk.video.save(
+                name=os.path.basename(video_path),
+                description=desc,
+                group_id=int(self.group_id),
+                is_private=0,
+                wallpost=1
+            )
+            upload_url = video_save['upload_url']
+            with open(video_path, 'rb') as f:
+                files = {'video_file': f}
                 resp = requests.post(upload_url, files=files)
             if resp.status_code == 200:
                 logging.info("Video uploaded to VK")
                 return True
-            logging.error(f"Upload HTTP error: {resp.status_code}")
+            else:
+                logging.error(f"Upload HTTP error: {resp.status_code}")
+                return False
         except Exception as e:
-            logging.error(f"Upload exception: {e}")
-        return False
+            logging.error(f"VK API error: {e}")
+            return False
 
     def process(self, video):
         logging.info(f"New video: {video['title']} ({video['id']})")
@@ -143,7 +138,6 @@ class VKReposter:
             time.sleep(self.interval)
 
 if __name__ == "__main__":
-    # Если передан аргумент --test-url
     if len(sys.argv) == 3 and sys.argv[1] == "--test-url":
         test_url = sys.argv[2]
         logging.info(f"TEST MODE: {test_url}")
@@ -161,7 +155,5 @@ if __name__ == "__main__":
         else:
             logging.info("Video is not vertical or too long")
         sys.exit(0)
-    
-    # Обычный запуск
     bot = VKReposter()
     bot.run()
