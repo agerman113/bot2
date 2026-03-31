@@ -1,6 +1,4 @@
-vk-api
 yt-dlp
 feedparser
-openai
-python-dotenv
 requests
+python-dotenv
