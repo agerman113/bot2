@@ -1,4 +1,4 @@
 yt-dlp
 feedparser
 requests
-python-dotenv
+vk-api
