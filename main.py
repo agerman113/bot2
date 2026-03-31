@@ -110,10 +110,7 @@ class VKYouTubeReposter:
             return False
 
     def download_video(self, url, output_path="temp_video.mp4"):
-        """
-        Скачивает видео с ограничением высоты 480p (экономия памяти).
-        Не требует FFmpeg.
-        """
+        """Скачивает видео с ограничением высоты 480p, без FFmpeg"""
         try:
             ydl_opts = {
                 'outtmpl': output_path,
@@ -151,7 +148,10 @@ class VKYouTubeReposter:
                     temperature=0.7,
                     max_tokens=200,
                 )
-                ai_text = response.choices[0].message.content.strip()
+                ai_text = response.choices[0].message.content
+                if ai_text is None:
+                    raise ValueError("AI вернул None")
+                ai_text = ai_text.strip()
                 full_description = f"{ai_text}\n\n{self.ad_text}"
                 return full_description
             except RateLimitError:
@@ -166,7 +166,7 @@ class VKYouTubeReposter:
         return f"Смешное видео: {video_title}\n\n{self.ad_text}"
 
     def post_to_vk(self, video_path, description):
-        """Публикует видео на стену сообщества (без is_clip для экономии памяти)"""
+        """Публикует видео на стену сообщества (без is_clip)"""
         try:
             video_data = self.upload.video(
                 video_file=video_path,
@@ -174,8 +174,7 @@ class VKYouTubeReposter:
                 description=description,
                 group_id=int(self.vk_group_id),
                 is_private=0,
-                wallpost=1,
-                # is_clip=1   # отключено, т.к. может вызывать ошибки
+                wallpost=1
             )
             video_url = f"https://vk.com/video{video_data['owner_id']}_{video_data['video_id']}"
             logging.info(f"Видео опубликовано: {video_url}")
@@ -196,18 +195,15 @@ class VKYouTubeReposter:
         if not video_file:
             return False
 
-        # Принудительная очистка памяти после скачивания
         gc.collect()
         time.sleep(1)
 
         description = self.generate_description(video_info["title"], video_info["url"])
         success = self.post_to_vk(video_file, description)
 
-        # Удаляем временный файл
         if os.path.exists(video_file):
             os.remove(video_file)
 
-        # Ещё раз сборка мусора
         gc.collect()
 
         if success:
@@ -240,7 +236,6 @@ class VKYouTubeReposter:
 
 
 if __name__ == "__main__":
-    # Тестовый режим: python main.py --test-url https://youtube.com/shorts/...
     if len(sys.argv) >= 3 and sys.argv[1] == "--test-url":
         test_url = sys.argv[2]
         logging.info(f"🧪 ТЕСТОВЫЙ РЕЖИМ: обработка видео {test_url}")
@@ -260,6 +255,5 @@ if __name__ == "__main__":
             logging.info("❌ Видео не вертикальное или слишком длинное. Тест прерван.")
         sys.exit(0)
 
-    # Обычный запуск (демон)
     bot = VKYouTubeReposter()
     bot.run()
