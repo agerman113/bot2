@@ -3,3 +3,4 @@ yt-dlp
 feedparser
 openai
 python-dotenv
+requests
