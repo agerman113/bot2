@@ -112,10 +112,15 @@ class VKYouTubeReposter:
             return False
 
     def download_video(self, url, output_path="temp_video.mp4"):
+        """
+        Скачивает видео с YouTube, используя готовый MP4 (не требует FFmpeg).
+        Если нет готового MP4, пробует другой формат.
+        """
         try:
+            # Сначала пробуем best[ext=mp4] - уже смешанный
             ydl_opts = {
                 'outtmpl': output_path,
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
+                'format': 'best[ext=mp4]/best',
                 'quiet': True,
                 'no_warnings': True,
             }
@@ -173,7 +178,7 @@ class VKYouTubeReposter:
                 group_id=int(self.vk_group_id),
                 is_private=0,
                 wallpost=1,
-                is_clip=1,          # ключевой параметр для загрузки как клипа
+                is_clip=1,          # загружаем как клип
             )
             video_url = f"https://vk.com/video{video_data['owner_id']}_{video_data['video_id']}"
             logging.info(f"Клип опубликован: {video_url}")
