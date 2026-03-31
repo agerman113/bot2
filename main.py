@@ -6,23 +6,34 @@ import logging
 import requests
 import feedparser
 import yt_dlp
-from dotenv import load_dotenv
 
-load_dotenv()
-
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class VKReposter:
     def __init__(self):
+        # Пробуем получить переменные из окружения
         self.token = os.getenv("VK_TOKEN")
         self.group_id = os.getenv("VK_GROUP_ID")
         self.channels = [ch.strip() for ch in os.getenv("CHANNEL_IDS", "").split(",") if ch]
         self.ad = os.getenv("AD_TEXT", "Заработок на партнёрках → https://vk.me/1onesis")
-        self.interval = int(os.getenv("CHECK_INTERVAL", 600))
-        self.processed = self.load_processed()
+        self.interval = int(os.getenv("CHECK_INTERVAL", "600"))
         
-        if not self.token or not self.group_id:
-            raise ValueError("VK_TOKEN и VK_GROUP_ID обязательны")
+        # Диагностика – выводим значения (но токен показываем частично)
+        logging.info(f"VK_TOKEN = {self.token[:10]}... (длина {len(self.token) if self.token else 0})")
+        logging.info(f"VK_GROUP_ID = {self.group_id}")
+        logging.info(f"CHANNEL_IDS = {self.channels}")
+        
+        # Проверка с понятным сообщением
+        if not self.token:
+            raise ValueError("VK_TOKEN не задан. Добавьте переменную окружения VK_TOKEN в панели bothost.ru")
+        if not self.group_id:
+            raise ValueError("VK_GROUP_ID не задан. Добавьте переменную окружения VK_GROUP_ID")
+        if not self.channels:
+            logging.warning("CHANNEL_IDS не заданы – бот будет работать, но не будет отслеживать каналы")
+        
+        self.processed = self.load_processed()
+        logging.info("Инициализация завершена")
 
     def load_processed(self):
         if os.path.exists("processed.txt"):
@@ -64,7 +75,7 @@ class VKReposter:
     def download(self, url, path="temp.mp4"):
         opts = {
             'outtmpl': path,
-            'format': 'worst[ext=mp4]',   # самый маленький, не требует FFmpeg
+            'format': 'worst[ext=mp4]',
             'quiet': True,
             'socket_timeout': 60,
             'retries': 5,
@@ -78,7 +89,6 @@ class VKReposter:
             return None
 
     def upload_to_vk(self, video_path, desc):
-        # Получаем URL для загрузки
         params = {
             "access_token": self.token,
             "v": "5.131",
@@ -88,18 +98,21 @@ class VKReposter:
             "is_private": 0,
             "wallpost": 1
         }
-        r = requests.get("https://api.vk.com/method/video.save", params=params).json()
-        if "error" in r:
-            logging.error(f"VK API error: {r['error']}")
-            return False
-        upload_url = r["response"]["upload_url"]
-        with open(video_path, "rb") as f:
-            files = {"video_file": f}
-            resp = requests.post(upload_url, files=files)
-        if resp.status_code == 200:
-            logging.info("Video uploaded to VK")
-            return True
-        logging.error(f"Upload HTTP error: {resp.status_code}")
+        try:
+            r = requests.get("https://api.vk.com/method/video.save", params=params).json()
+            if "error" in r:
+                logging.error(f"VK API error: {r['error']}")
+                return False
+            upload_url = r["response"]["upload_url"]
+            with open(video_path, "rb") as f:
+                files = {"video_file": f}
+                resp = requests.post(upload_url, files=files)
+            if resp.status_code == 200:
+                logging.info("Video uploaded to VK")
+                return True
+            logging.error(f"Upload HTTP error: {resp.status_code}")
+        except Exception as e:
+            logging.error(f"Upload exception: {e}")
         return False
 
     def process(self, video):
@@ -111,7 +124,6 @@ class VKReposter:
         path = self.download(video['url'])
         if not path:
             return
-        # Простое описание без AI (для надёжности)
         desc = f"😂 {video['title']}\n\n#юмор #shorts\n\n{self.ad}"
         ok = self.upload_to_vk(path, desc)
         os.remove(path)
@@ -122,7 +134,7 @@ class VKReposter:
             logging.error("Publication failed")
 
     def run(self):
-        logging.info("Bot started")
+        logging.info("Bot started, entering main loop")
         while True:
             for ch in self.channels:
                 vid = self.get_latest(ch)
@@ -131,17 +143,25 @@ class VKReposter:
             time.sleep(self.interval)
 
 if __name__ == "__main__":
+    # Если передан аргумент --test-url
     if len(sys.argv) == 3 and sys.argv[1] == "--test-url":
-        url = sys.argv[2]
-        logging.info(f"Test mode: {url}")
+        test_url = sys.argv[2]
+        logging.info(f"TEST MODE: {test_url}")
         bot = VKReposter()
-        if bot.check_vertical(url):
-            path = bot.download(url)
+        if bot.check_vertical(test_url):
+            logging.info("Video is vertical, downloading...")
+            path = bot.download(test_url)
             if path:
                 desc = f"😂 Test video\n\n#юмор #shorts\n\n{bot.ad}"
                 bot.upload_to_vk(path, desc)
                 os.remove(path)
+                logging.info("Test finished")
+            else:
+                logging.error("Download failed")
         else:
-            logging.info("Not vertical or too long")
+            logging.info("Video is not vertical or too long")
         sys.exit(0)
-    VKReposter().run()
+    
+    # Обычный запуск
+    bot = VKReposter()
+    bot.run()
