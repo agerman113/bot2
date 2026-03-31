@@ -1,4 +1,8 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import os
+import sys
 import time
 import logging
 import feedparser
@@ -7,7 +11,6 @@ from dotenv import load_dotenv
 from openai import OpenAI, RateLimitError
 import vk_api
 from vk_api.upload import VkUpload
-import requests
 
 load_dotenv()
 
@@ -21,18 +24,19 @@ logging.basicConfig(
     ]
 )
 
-class YouTubeShortsToVKClipsBot:
+class VKYouTubeReposter:
     def __init__(self):
         self.vk_token = os.getenv("VK_GROUP_TOKEN")
-        self.vk_group_id = int(os.getenv("VK_GROUP_ID"))
+        self.vk_group_id = os.getenv("VK_GROUP_ID")
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         self.model = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
         self.check_interval = int(os.getenv("CHECK_INTERVAL", 600))
         self.channel_ids = [ch.strip() for ch in os.getenv("CHANNEL_IDS", "").split(",") if ch.strip()]
         self.ad_text = os.getenv("AD_TEXT", "Узнай, как зарабатывать на партнёрских программах → https://vk.me/1onesis")
-        self.max_duration_seconds = int(os.getenv("MAX_DURATION_SECONDS", 60))  # Shorts обычно до 60 сек
+        self.max_duration = int(os.getenv("MAX_DURATION_SECONDS", 60))
 
         if not self.channel_ids:
+            logging.error("Не указаны CHANNEL_IDS в .env. Бот остановлен.")
             raise ValueError("CHANNEL_IDS is empty")
 
         # VK
@@ -60,11 +64,11 @@ class YouTubeShortsToVKClipsBot:
         self.processed_videos.add(video_id)
 
     def get_latest_video_from_channel(self, channel_id):
-        """Получает последнее видео с канала через RSS"""
         try:
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
             feed = feedparser.parse(rss_url)
             if not feed.entries:
+                logging.warning(f"Нет записей в RSS для канала {channel_id}")
                 return None
             latest = feed.entries[0]
             video_id = latest.id.split(":")[-1]
@@ -72,11 +76,11 @@ class YouTubeShortsToVKClipsBot:
             title = latest.title
             return {"id": video_id, "url": video_url, "title": title}
         except Exception as e:
-            logging.error(f"RSS error {channel_id}: {e}")
+            logging.error(f"Ошибка получения RSS для {channel_id}: {e}")
             return None
 
-    def get_video_info(self, url):
-        """Получает метаданные: длительность, ширина, высота"""
+    def is_vertical_video(self, url):
+        """Проверяет вертикальность (высота > ширина) и длительность <= max_duration"""
         try:
             ydl_opts = {
                 'quiet': True,
@@ -85,52 +89,47 @@ class YouTubeShortsToVKClipsBot:
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
+                # Длительность
                 duration = info.get('duration', 0)
+                if duration > self.max_duration:
+                    logging.info(f"Видео слишком длинное: {duration} сек (макс {self.max_duration})")
+                    return False
+
+                # Размеры
                 width = info.get('width')
                 height = info.get('height')
-                # Если нет ширины/высоты, пробуем из форматов
-                if not width or not height:
-                    formats = info.get('formats', [])
-                    for f in formats:
-                        if f.get('width') and f.get('height'):
-                            width = f['width']
-                            height = f['height']
-                            break
-                return duration, width, height
+                if width and height:
+                    return height > width
+                # Если нет прямых размеров, пробуем из форматов
+                formats = info.get('formats', [])
+                for f in formats:
+                    if f.get('width') and f.get('height'):
+                        return f['height'] > f['width']
+                logging.warning(f"Не удалось определить размеры видео {url}, пропускаем")
+                return False
         except Exception as e:
-            logging.error(f"Ошибка получения метаданных: {e}")
-            return 0, None, None
-
-    def is_eligible_short(self, url):
-        """Проверяет, подходит ли видео: вертикальное и длительность <= MAX_DURATION_SECONDS"""
-        duration, width, height = self.get_video_info(url)
-        if duration is None or width is None or height is None:
-            logging.warning(f"Не удалось определить параметры видео {url}, пропускаем")
+            logging.error(f"Ошибка проверки ориентации/длительности: {e}")
             return False
-        is_vertical = height > width if width and height else False
-        is_short = duration <= self.max_duration_seconds
-        logging.info(f"Видео: длит={duration}с, {width}x{height}, верт={is_vertical}, short={is_short}")
-        return is_vertical and is_short
 
     def download_video(self, url, output_path="temp_video.mp4"):
-        """Скачивает видео в mp4"""
         try:
             ydl_opts = {
                 'outtmpl': output_path,
-                'format': 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]',
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
                 'quiet': True,
                 'no_warnings': True,
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
+            logging.info(f"Видео скачано: {url}")
             return output_path
         except Exception as e:
-            logging.error(f"Download error: {e}")
+            logging.error(f"Ошибка скачивания видео: {e}")
             return None
 
     def generate_description(self, video_title, video_url):
         prompt = f"""
-        Напиши короткое и привлекательное описание для смешного вертикального короткого видео (YouTube Shorts), которое будет опубликовано в VK Клипах.
+        Напиши короткое и привлекательное описание для смешного вертикального видео (YouTube Shorts), которое будет опубликовано в VK Клипах.
         Оригинальное название видео: "{video_title}"
         Ссылка на видео: {video_url}
         
@@ -155,100 +154,101 @@ class YouTubeShortsToVKClipsBot:
                 return full_description
             except RateLimitError:
                 wait = 20 * (attempt + 1)
-                logging.warning(f"Rate limit, ждём {wait}с")
+                logging.warning(f"Превышен лимит OpenRouter. Ждём {wait} сек...")
                 time.sleep(wait)
             except Exception as e:
-                logging.error(f"AI error: {e}")
+                logging.error(f"Ошибка AI: {e}")
                 if attempt == max_retries - 1:
-                    return f"😄 Смешной Shorts: {video_title}\n\n#юмор #shorts\n\n{self.ad_text}"
+                    fallback = f"😄 Смешное вертикальное видео: {video_title}\n\n#юмор #shorts\n\n{self.ad_text}"
+                    return fallback
         return f"Смешное видео: {video_title}\n\n{self.ad_text}"
 
-    def upload_to_vk_clip(self, video_path, title, description):
-        """Загружает видео как VK Клип (is_clip=1)"""
+    def post_to_vk(self, video_path, description):
+        """Публикует видео как VK Клип (is_clip=1) на стену сообщества"""
         try:
-            # Получаем сервер для загрузки клипа
-            save_params = {
-                "name": title[:200],  # ограничение длины
-                "description": description[:1000],
-                "is_clip": 1,        # ключевой параметр для клипов
-                "group_id": self.vk_group_id,
-                "wallpost": 0,       # не публиковать на стену, только в клипы
-            }
-            # Метод video.save возвращает upload_url
-            save_response = self.vk.video.save(**save_params)
-            upload_url = save_response['upload_url']
-            owner_id = save_response['owner_id']
-            video_id = save_response['video_id']
-
-            # Загружаем файл по upload_url
-            with open(video_path, 'rb') as f:
-                files = {'video_file': f}
-                response = requests.post(upload_url, files=files)
-                response.raise_for_status()
-
-            # Подтверждаем загрузку (можно не делать, VK сам обработает)
-            logging.info(f"Клип загружен: owner_id={owner_id}, video_id={video_id}")
-            clip_url = f"https://vk.com/clip{owner_id}_{video_id}"
-            return clip_url
+            video_data = self.upload.video(
+                video_file=video_path,
+                name=os.path.basename(video_path),
+                description=description,
+                group_id=int(self.vk_group_id),
+                is_private=0,
+                wallpost=1,
+                is_clip=1,          # ключевой параметр для загрузки как клипа
+            )
+            video_url = f"https://vk.com/video{video_data['owner_id']}_{video_data['video_id']}"
+            logging.info(f"Клип опубликован: {video_url}")
+            return True
         except Exception as e:
-            logging.error(f"Ошибка загрузки клипа VK: {e}")
-            return None
+            logging.error(f"Ошибка публикации в VK: {e}")
+            return False
 
-    def process_short(self, channel_id, video_info):
-        logging.info(f"Новый Shorts: {video_info['title']} ({video_info['url']})")
+    def process_new_video(self, channel_id, video_info):
+        logging.info(f"Новое видео на канале {channel_id}: {video_info['title']} ({video_info['url']})")
 
-        # Проверяем eligibility (вертикальность и длительность)
-        if not self.is_eligible_short(video_info["url"]):
-            logging.info(f"Видео {video_info['id']} не подходит (не вертикальное или длинное), пропускаем")
+        if not self.is_vertical_video(video_info["url"]):
+            logging.info(f"Видео {video_info['id']} не вертикальное или слишком длинное. Пропускаем.")
             self.save_processed_video(video_info["id"])
             return False
 
-        # Скачиваем
         video_file = self.download_video(video_info["url"])
         if not video_file:
             return False
 
-        # Генерируем описание с рекламой
         description = self.generate_description(video_info["title"], video_info["url"])
-        # Заголовок для клипа (можно взять оригинальный)
-        title = video_info["title"][:200]
+        success = self.post_to_vk(video_file, description)
 
-        # Загружаем в VK Клипы
-        clip_url = self.upload_to_vk_clip(video_file, title, description)
-
-        # Удаляем временный файл
         if os.path.exists(video_file):
             os.remove(video_file)
 
-        if clip_url:
+        if success:
             self.save_processed_video(video_info["id"])
-            logging.info(f"✅ Shorts опубликован как VK Клип: {clip_url}")
-            return True
+            logging.info(f"Вертикальное видео {video_info['id']} успешно опубликовано как клип")
         else:
-            logging.error(f"❌ Не удалось опубликовать {video_info['id']}")
-            return False
+            logging.error(f"Не удалось опубликовать видео {video_info['id']}")
+        return success
 
     def run(self):
-        logging.info("🚀 Бот запущен. Мониторинг YouTube Shorts -> VK Клипы")
-        logging.info(f"Отслеживаемые каналы: {', '.join(self.channel_ids)}")
+        logging.info("🚀 Бот запущен. Мониторинг каналов (только вертикальные клипы до {} сек): {}".format(
+            self.max_duration, ", ".join(self.channel_ids)))
         while True:
             try:
                 for channel_id in self.channel_ids:
                     logging.info(f"Проверка канала {channel_id}...")
                     latest = self.get_latest_video_from_channel(channel_id)
                     if latest and latest["id"] not in self.processed_videos:
-                        self.process_short(channel_id, latest)
+                        self.process_new_video(channel_id, latest)
                     else:
                         logging.info(f"Новых видео на канале {channel_id} нет")
                 logging.info(f"Ожидание {self.check_interval} секунд...")
                 time.sleep(self.check_interval)
             except KeyboardInterrupt:
-                logging.info("Бот остановлен")
+                logging.info("Бот остановлен пользователем")
                 break
             except Exception as e:
                 logging.error(f"Неожиданная ошибка: {e}")
                 time.sleep(60)
 
+
 if __name__ == "__main__":
-    bot = YouTubeShortsToVKClipsBot()
+    # Тестовый режим: python main.py --test-url https://youtube.com/shorts/...
+    if len(sys.argv) >= 3 and sys.argv[1] == "--test-url":
+        test_url = sys.argv[2]
+        logging.info(f"🧪 ТЕСТОВЫЙ РЕЖИМ: обработка видео {test_url}")
+        bot = VKYouTubeReposter()
+        if bot.is_vertical_video(test_url):
+            logging.info("Видео подходит (вертикальное, короткое). Скачиваем...")
+            video_file = bot.download_video(test_url)
+            if video_file:
+                description = bot.generate_description("Тестовое видео из Shorts", test_url)
+                bot.post_to_vk(video_file, description)
+                os.remove(video_file)
+                logging.info("✅ Тестовая публикация завершена")
+            else:
+                logging.error("❌ Не удалось скачать видео")
+        else:
+            logging.info("❌ Видео не вертикальное или слишком длинное. Тест прерван.")
+        sys.exit(0)
+
+    # Обычный запуск (демон)
+    bot = VKYouTubeReposter()
     bot.run()
